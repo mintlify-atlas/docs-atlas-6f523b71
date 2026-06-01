@@ -1,7 +1,7 @@
 ---
 title: "Admin Sponsor Management — Tiers, CRUD & Profiles"
 sidebarTitle: "Sponsors"
-description: "Developer reference for managing sponsors in the Admin Dashboard: tier system, adding and deleting sponsors, updating bio and links, passcode mechanics, and the SponsorList component."
+description: "Reference for the Admin Dashboard Sponsors panel: tier system, add/delete flows, passcode mechanics, profile editing, and the SponsorList component props."
 ---
 
 The Sponsors section of the Admin Dashboard provides full lifecycle management for chapter sponsors. Sponsor data is loaded on dashboard mount via `GET /sponsors/` and stored in two parallel arrays — `sponsors[]` (company names) and `tiers[]` (corresponding tier strings) — indexed in sync. The `SponsorList` component renders these pairs as interactive list rows supporting tier changes, profile editing, and deletion. Adding a sponsor is handled by `AddSponsorModal`, which collects the company name, tier, email list, and a passcode. All destructive and mutating actions flow through the centralized `ConfirmDialog` in `Admin.tsx`.

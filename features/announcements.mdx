@@ -130,6 +130,16 @@ All fetched announcement IDs are written to `localStorage` as read the moment th
 
 The modal is rendered via `createPortal` into `document.body`, preventing z-index clipping issues with the page's own stacking contexts. It applies `useScrollLock` to disable background scroll while open.
 
+### Props
+
+```typescript
+interface MemberAnnouncementsListModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  announcementsData: Announcement[];
+}
+```
+
 ### Sorting
 
 On open, announcements are sorted with pinned items first, then by `created_at` descending:
@@ -159,7 +169,23 @@ On close (`!isOpen`), `sortedAnnouncements` is reset to `[]` so the next open st
 
 ## AnnouncementListShort
 
-`AnnouncementListShort` renders the scrollable list of announcement rows inside the modal. It has its own internal search state for filtering within the already-fetched list:
+`AnnouncementListShort` renders the scrollable list of announcement rows inside the modal. It has its own internal search state for filtering within the already-fetched list.
+
+### Props
+
+```typescript
+interface AnnouncementListShortProps {
+  announcements: Announcement[];
+  onEdit?: (announcement: Announcement) => void;
+  onView?: (announcement: Announcement) => void;
+  onDelete?: (announcement: Announcement) => void;
+  onCreateNew?: () => void;
+}
+```
+
+All props except `announcements` are optional. `MemberAnnouncementsListModal` passes only `announcements` and `onView`; the `onEdit`, `onDelete`, and `onCreateNew` props are used exclusively by admin views.
+
+### Search logic
 
 ```typescript
 const filteredAnnouncements = announcements.filter((a) => {
@@ -218,7 +244,7 @@ const isAlumniUser = isAlumni(rank);
 )}
 ```
 
-The entire right-side button group (bell + Slack) is conditionally excluded. No fetch is prevented — the announcement fetch still runs — but the UI is invisible to alumni.
+The entire right-side button group (bell + Slack) is conditionally excluded. The announcement fetch still runs regardless — but the UI is invisible to alumni.
 
 `canAccessFeature("alumni", "announcements")` returns `false` per `utils/permissions.ts`. If you add a standalone announcements route, gate it with this helper.
 

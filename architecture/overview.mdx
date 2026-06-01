@@ -1,7 +1,7 @@
 ---
-title: "BAP Beta Tau Frontend Architecture Overview"
+title: "BAP Beta Tau Frontend Architecture: Packages and Structure"
 sidebarTitle: "Overview"
-description: "A detailed look at the full dependency stack, the src/ directory organization, and the conventions that govern how pages, components, and context are structured."
+description: "A detailed look at the full dependency stack, the src/ directory layout, and the conventions that govern how pages, components, and context are structured."
 ---
 
 The BAP Beta Tau frontend is a single-page application assembled from a deliberate, narrow dependency tree. React 19 provides the component model; Vite 6 handles bundling and the development server; Tailwind CSS 3 manages styling through utility classes and a small set of brand-specific design tokens; and Supabase JS 2 owns all authentication concerns. The backend is a completely separate service — the frontend is a pure consumer of its REST API, communicating over standard HTTP with Axios and the browser's native `fetch`. Understanding how these layers fit together — and how the `src/` directory reflects that layering — is the prerequisite for contributing to the codebase effectively.
@@ -38,6 +38,7 @@ The BAP Beta Tau frontend is a single-page application assembled from a delibera
   "@eslint/js": "^9.21.0",
   "@tailwindcss/postcss": "^4.0.15",
   "@tailwindcss/typography": "^0.5.19",
+  "@types/axios": "^0.14.4",
   "@types/leaflet": "^1.9.17",
   "@types/react": "^19.0.10",
   "@types/react-dom": "^19.0.4",
@@ -46,6 +47,7 @@ The BAP Beta Tau frontend is a single-page application assembled from a delibera
   "eslint": "^9.21.0",
   "eslint-plugin-react-hooks": "^5.1.0",
   "eslint-plugin-react-refresh": "^0.4.19",
+  "globals": "^15.15.0",
   "postcss": "^8.5.3",
   "tailwind-scrollbar": "^4.0.2",
   "tailwindcss": "^3.4.17",
@@ -193,6 +195,7 @@ Components are organized by domain, not by type. A "card" component for events l
   - `NetworkList.tsx` — Renders the grid of member profile cards
   - `NetworkSearch.tsx` — Fuse.js-powered fuzzy search bar
   - `NetworkProfileModal.tsx` — Full-screen profile modal on card click
+  - `SponsorProfileModal.tsx` — Profile modal for sponsor contacts
 </Accordion>
 
 <Accordion title="components/common/">

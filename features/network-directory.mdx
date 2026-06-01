@@ -135,7 +135,23 @@ const mapEboardEntryToMember = (
 });
 ```
 
-EboardPage has **no** graduation year, major, or status filters — the filter panel is empty (`availableGraduationYears: []`, etc.) and only fuzzy name/email/major/about search is available.
+EboardPage passes `handleSearch` as a single-argument function — it only accepts a `query` string (no filters object), because no filter dropdowns are active:
+
+```typescript
+const handleSearch = useCallback(
+  (query: string) => {
+    if (!query.trim()) {
+      setFilteredMembers(members);
+      return;
+    }
+    const searchResults = fuse.search(query);
+    setFilteredMembers(searchResults.map((result) => result.item));
+  },
+  [fuse, members]
+);
+```
+
+`NetworkSearch` receives `availableGraduationYears: []`, `availableMajors: []`, and `availableStatuses: []`, so the filter panel renders empty dropdowns and only fuzzy name/email/major/about search is active.
 
 ## Fuse.js Configuration
 
@@ -146,7 +162,7 @@ Each page instantiates a `Fuse` object via `useMemo` — it rebuilds only when `
     ```typescript
     const fuseOptions = {
       includeScore: true,
-      threshold: 0.3,       // Lower = stricter matching
+      threshold: 0.3,
       keys: [
         { name: "name",           weight: 0.8 },
         { name: "about",          weight: 0.4 },
@@ -237,13 +253,15 @@ const { sortBy, sortedData: sortedMembers, handleSortChange } = useSort(
     | `major-desc` | Major (Z-A) |
     | `rank-asc` | Rank (Current First) |
     | `rank-desc` | Rank (Alumni First) |
+    | `status-asc` | Status (A-Z) |
+    | `status-desc` | Status (Z-A) |
     | `hours-desc` *(default)* | Total Hours (High to Low) |
     | `hours-asc` | Total Hours (Low to High) |
     | `email-asc` | Email (A-Z) |
     | `email-desc` | Email (Z-A) |
   </Tab>
   <Tab title="AlumniPage sort options">
-    Same as NetworkingPage minus `rank-asc` and `rank-desc` (all entries are alumni). Default: `name-asc`.
+    Same as NetworkingPage minus `rank-asc` and `rank-desc` (all entries are alumni). Default: `name-asc`. Includes `status-asc` and `status-desc`.
   </Tab>
   <Tab title="EboardPage sort options">
     | Value | Label |

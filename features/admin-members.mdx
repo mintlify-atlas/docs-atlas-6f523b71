@@ -1,7 +1,7 @@
 ---
 title: "Admin Member Management — Active, Archived & Alumni"
 sidebarTitle: "Members"
-description: "Full reference for the three member panels in the Admin Dashboard: active general members, archived (soft-deleted) members, and read-only alumni, including rank and archive/restore flows."
+description: "Admin Dashboard member panels: active roster, archived, and alumni — rank values, archive/restore service calls, and inline profile edit flow."
 ---
 
 Member management in the Admin Dashboard is divided across three panels rendered inside the two-column grid in `Admin.tsx`: **General Members** (active roster), **Archived Members** (soft-deleted), and **Alumni Members** (read-only). All three share the same `GET /users/summary` source of truth for active users, but each panel fetches and manages its own slice of data independently. The General Members panel is the most interactive — it supports search, rank filtering, inline profile editing, and soft-archiving. Archived Members supports restore. Alumni is display-only with a search filter. Together they implement a full member lifecycle: onboarding → active → archived → (optionally) permanently deleted.
@@ -121,7 +121,7 @@ Results are aggregated with `Promise.allSettled` — successful emails are passe
     `handleEditClick` in `EmailList` calls the parent's `onEdit(email)` prop, which triggers `handleMemberEdit(email)` in `Admin.tsx`.
   </Step>
   <Step title="Admin.tsx fetches full MemberDetail">
-    If the email is not already in the `memberDetails` cache, `GET /member-info/:email` is called. The raw API response is normalized into a `MemberDetail` object:
+    If the email is not already in the `memberDetails` cache (keyed by `email.trim().toLowerCase()`), `GET /member-info/:email` is called. The raw API response is normalized into a `MemberDetail` object:
     ```ts
     const freshData: MemberDetail = {
       id: raw.id?.toString() || raw.user_id || raw.user_email,
@@ -201,7 +201,8 @@ export const archiveMember = async (email: string, token: string): Promise<Archi
       },
     }
   );
-  // ...
+  // throws on non-ok response
+  return await response.json();
 };
 ```
 
@@ -215,9 +216,16 @@ The endpoint performs a soft delete, setting `deleted_at` to the current timesta
 export const restoreMember = async (email: string, token: string): Promise<ArchiveResponse> => {
   const response = await fetch(
     `${import.meta.env.VITE_BACKEND_URL}/member-info/${email}/restore`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    }
   );
-  // ...
+  // throws on non-ok response
+  return await response.json();
 };
 ```
 
@@ -247,7 +255,7 @@ export interface ArchivedMember {
 
 ### Refresh Coordination
 
-`Admin.tsx` uses a ref-stored callback pattern to allow `ArchivedMembersList` to expose its internal `fetchArchivedMembers` function to the parent:
+`Admin.tsx` uses a state-stored callback pattern to allow `ArchivedMembersList` to expose its internal `fetchArchivedMembers` function to the parent:
 
 ```tsx
 // In Admin.tsx

@@ -1,10 +1,10 @@
 ---
 title: "Admin Event Management — Create, Edit & Hidden Buckets"
 sidebarTitle: "Events"
-description: "Developer reference for admin event management: full create/edit form fields, the AdminEvent type, hidden administrative buckets, RSVP and attendee data, and check-in configuration."
+description: "E-board event management on the Events page: create/edit form fields, AdminEvent type, hidden buckets, RSVP data, and geo-fenced check-in config."
 ---
 
-Event management in the Admin Dashboard is handled by the `AdminEventsSection` component, which is not rendered directly inside `Admin.tsx` — it is a standalone section component that wraps `EventListShort` and toggles between two views: **Standard Events** (visible to members) and **Hidden / Buckets** (admin-only). E-board users can create new events via `CreateEventModal`, edit existing ones via `EditEventModal`, and toggle an event's hidden status through the `is_hidden` flag. The `AdminEvent` type extends the base `Event` type with admin-exclusive fields such as `event_rsvped`, `event_attending`, `is_hidden`, `check_in_window`, and `check_in_radius`.
+Event management for e-board users lives on the **Events page** (`EventsPage.tsx`, route `/events`) — not inside the Admin Dashboard at `/admin`. When the authenticated user's `role` is `"e-board"`, the Events page renders additional controls: a **+ New Event** button above the Upcoming Events list, and per-card **Edit**, **Delete**, and **Announce** icon buttons. Creating events opens `CreateEventModal`; editing opens `EditEventModal`. Both modals are mounted via `React.createPortal` onto `document.body`. A toggle pill bar (`Standard` / `Hidden`) lets e-board users switch between the public-facing event feed and the hidden administrative bucket. All event data is typed as `AdminEvent` for e-board sessions and `MemberEvent` for general-member sessions, both extending the shared `BaseEvent` base type from `src/types/index.ts`.
 
 ## The AdminEvent Type
 
@@ -50,30 +50,37 @@ const isAdminEvent = (event: Event): event is AdminEvent => {
 };
 ```
 
-This guard is used in `AdminEventsSection` and `EditEventModal` to safely branch logic that only applies to the admin-facing event shape.
+This guard is used in `EventsPage` and `EditEventModal` to safely branch logic that only applies to the admin-facing event shape.
 
 ## View Modes: Standard vs. Hidden Buckets
 
-`AdminEventsSection` maintains a local `viewMode` state (`'standard'` | `'hidden'`). A pill-style tab bar at the top of the section switches between the two modes.
+`EventsPage` maintains a local `showHidden` boolean. A pill-style toggle at the top of the page switches between the two modes when the user is e-board.
 
 ```ts
-const visibleUpcoming = upcomingEvents.filter(e => isAdminEvent(e) && !e.is_hidden);
-const visiblePast     = pastEvents.filter(e => isAdminEvent(e) && !e.is_hidden);
-const hiddenEvents    = [...upcomingEvents, ...pastEvents].filter(e => isAdminEvent(e) && e.is_hidden);
+const filteredEvents = allEvents.filter((event) => {
+  const isHiddenEvent = 'is_hidden' in event && event.is_hidden;
+  if (showHidden) {
+    if (!isHiddenEvent) return false;  // Show only hidden events
+  } else {
+    if (isHiddenEvent) return false;   // Show only standard events
+  }
+  // ... also filter by searchQuery
+});
 ```
 
 <Tabs>
   <Tab title="Standard Events">
-    Shows two sub-lists rendered by `EventListShort`:
-    - **Upcoming Events** — non-hidden events with a future `event_date`
-    - **Past Events** — non-hidden events with a past `event_date`, displayed in a `max-h-72 overflow-y-auto` scrollable container
+    Shows three sub-sections:
+    - **Events In-Session** — events currently active based on `event_date`, `event_time`, and `event_hours`
+    - **Upcoming Events** — events with a future `event_date` not yet in-session
+    - **Past Events** — events with a past `event_date`, paginated with a "Load More" button (3 per page)
 
     Members see this same feed on the public events page.
   </Tab>
   <Tab title="Hidden / Buckets">
     Shows all events where `is_hidden === true`. These events are completely invisible in the member-facing feed. They are used to grant hours to members without requiring physical attendance at a "real" event — for example, granting professional development hours for completing a certification or attending an external conference.
 
-    The tab is labelled **Hidden / Buckets** and shows a "Not visible to members" badge.
+    The toggle is labelled **Hidden** and is only shown to e-board users.
   </Tab>
 </Tabs>
 
@@ -85,7 +92,7 @@ const hiddenEvents    = [...upcomingEvents, ...pastEvents].filter(e => isAdminEv
 
 ## Creating an Event
 
-`CreateEventModal` is mounted via `React.createPortal` onto `document.body` (z-index `9999`). It owns all form state locally and uses `useScrollLock(true)` to prevent background scroll while open.
+`CreateEventModal` is mounted via `React.createPortal` onto `document.body` (z-index `9999`). It owns all form state locally and uses `useScrollLock(true)` to prevent background scroll while open. The **+ New Event** button is only visible to e-board users in the Upcoming Events header.
 
 ### Form Fields
 
@@ -187,7 +194,46 @@ const eventDataToUpdate = {
 };
 ```
 
-After a successful save, the `onEventUpdated` callback receives a locally-constructed `AdminEvent` object for immediate UI refresh — the page does not need to re-fetch the full event list.
+After a successful save, `EventsPage` re-fetches the full event list from `GET /events` to refresh the UI.
+
+---
+
+## Deleting an Event
+
+Each `EventCard` rendered for e-board users has a **Delete** icon button. Clicking it sets `eventToDelete` and opens a `ConfirmationModal`:
+
+```
+"Are you sure you want to delete the event '{event_name}'? This action cannot be undone."
+```
+
+On confirm:
+
+```ts
+// POST /events/delete-event
+body: JSON.stringify({ event_id: eventToDelete.id })
+```
+
+The deleted event is filtered from `allEvents[]` local state immediately.
+
+---
+
+## Announcing an Event
+
+E-board users can send an email announcement for an event via the **Announce** button on each `EventCard`. Clicking it opens a `ConfirmationModal`:
+
+```
+"Are you sure you want to announce the event '{event_name}'?"
+```
+
+On confirm:
+
+```ts
+// POST /events/send-event
+body: JSON.stringify({
+  event_id: eventToAnnounce.id,
+  recipient_filter: "rsvped",  // Backend fetches emails from database
+})
+```
 
 ---
 
@@ -271,6 +317,10 @@ export type EventParticipants = {
 
 | Operation | Method | Endpoint | Key Body Fields |
 |---|---|---|---|
+| List events (authed) | GET | `/events` | — |
+| List events (public) | GET | `/events/public` | — |
 | Create event | POST | `/events/add-event` | `event_name`, `event_date`, `event_time`, `event_hours`, `event_hours_type`, `is_hidden`, `check_in_window`, `check_in_radius`, `event_limit` |
 | Edit event | POST | `/events/edit-event` | `event_id`, `name`, `date`, `location`, `is_hidden`, `check_in_window`, `check_in_radius` |
+| Delete event | POST | `/events/delete-event` | `event_id` |
+| Announce event | POST | `/events/send-event` | `event_id`, `recipient_filter` |
 | Get participants | GET | `/events/:eventId/participants` | — |

@@ -295,24 +295,65 @@ curl -X POST https://asubap-backend.vercel.app/sponsors/change-sponsor-tier \
 
 ---
 
-### `GET /sponsors/:name/details`
+### `GET /sponsors/summary`
 
-Retrieves detailed profile information for a specific sponsor.
+Returns a lightweight list of all sponsors for directory display. Resources and email lists are **not** included. Used by `SponsorsNetworkPage` to populate the sponsor directory.
 
 **Auth:** `Authorization: Bearer <token>` (required)
 
-**Path param:** `name` — URL-encoded company name.
+**Response:** Array of sponsor summary objects
+
+<ResponseField name="id" type="number">Database identifier (optional).</ResponseField>
+<ResponseField name="company_name" type="string">Display name of the sponsor.</ResponseField>
+<ResponseField name="about" type="string">Company description.</ResponseField>
+<ResponseField name="links" type="string | null">Links — may arrive as a JSON string, comma-separated string, or array. The frontend parses all three forms.</ResponseField>
+<ResponseField name="pfp_url" type="string">Profile photo URL.</ResponseField>
+<ResponseField name="tier" type="string">Sponsor tier (e.g., `"gold"`, `"silver"`, `"bronze"`).</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/sponsors/summary \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `GET /sponsors/names`
+
+Returns the list of sponsor company names. Used by `SponsorAuth` to populate the company dropdown on the login page. This endpoint does **not** require an auth token.
+
+**Auth:** None required
+
+**Response:** Array of objects with `company_name`
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/sponsors/names
+# Response: [{"company_name": "Acme Corp"}, ...]
+```
+
+---
+
+### `POST /sponsors/get-one-sponsor-info`
+
+Returns the full profile for a single sponsor by name. Used by `SponsorHome` to load the authenticated sponsor's own profile data.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="sponsor_name" type="string" required>
+  The company name of the sponsor to retrieve.
+</ParamField>
 
 **Response:**
 
 <ResponseField name="company_name" type="string">The sponsor's display name.</ResponseField>
 <ResponseField name="about" type="string">Company description.</ResponseField>
-<ResponseField name="links" type="string[]">Array of URLs.</ResponseField>
 <ResponseField name="pfp_url" type="string">Profile photo URL (Vercel Blob).</ResponseField>
+<ResponseField name="links" type="string[]">Array of URLs.</ResponseField>
 
 ```bash
-curl -X GET "https://asubap-backend.vercel.app/sponsors/Acme%20Corp/details" \
-  -H "Authorization: Bearer <token>"
+curl -X POST https://asubap-backend.vercel.app/sponsors/get-one-sponsor-info \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"sponsor_name": "Acme Corp"}'
 ```
 
 ---

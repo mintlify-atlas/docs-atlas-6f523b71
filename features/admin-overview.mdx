@@ -1,7 +1,7 @@
 ---
 title: "Admin Dashboard Overview — Beta Alpha Psi Beta Tau"
 sidebarTitle: "Admin Overview"
-description: "A developer-focused map of the Admin Dashboard at /admin, covering all eight sections, access control, layout, and navigation between features."
+description: "Developer map of the Admin Dashboard at /admin: eight sections, access control, data-fetch order, layout, and the global confirm dialog pattern."
 ---
 
 The Admin Dashboard is the central control plane for e-board members of the Beta Alpha Psi Beta Tau Chapter. It lives at the `/admin` route and is exclusively accessible to authenticated users whose `role` field equals `"e-board"` — any other role is implicitly excluded by the route guard. On mount, the page fires four parallel fetches: `GET /users/summary` (twice, split into admin and member lists), `GET /sponsors/`, and `GET /announcements`. All state is held inside the `Admin` component; child sections receive sliced props and callback functions rather than managing their own top-level data. The page renders a full-width `Navbar` (with role-aware nav links), then a two-column `md:grid-cols-2` grid containing the eight dashboard sections described below, and ends with a `Footer`. All destructive and mutating actions are wrapped in either a `ConfirmDialog` (reusable, centralized) or a component-local `ConfirmationModal`, keeping confirmation logic consistent across the entire surface.
@@ -20,7 +20,7 @@ Sections are assigned `order-N` classes that control mobile vs. desktop stacking
 
 <CardGroup cols={2}>
   <Card title="Announcements" icon="megaphone" href="/features/admin-overview#announcements">
-    Create, view, edit, delete, and pin rich-text announcements. Sorted pinned-first then newest-first. Uses TinyMCE for authoring.
+    Create, view, edit, and delete rich-text announcements. Sorted pinned-first then newest-first. Uses TinyMCE for authoring new announcements.
   </Card>
   <Card title="Admin Users" icon="shield" href="/features/admin-overview#admin-users">
     List of current e-board email addresses. Add new admins by email; remove them with a single click backed by `/users/delete-user`.
@@ -31,10 +31,10 @@ Sections are assigned `order-N` classes that control mobile vs. desktop stacking
   <Card title="General Members" icon="users" href="/features/admin-members">
     Active `general-member` roster with search, rank filter, inline archive, and full profile edit. See the Members page.
   </Card>
-  <Card title="Archived Members" icon="archive" href="/features/admin-members#archived-members">
+  <Card title="Archived Members" icon="archive" href="/features/admin-members#archived-members-panel">
     Soft-deleted members. Restore with a single click; they re-appear in the active list immediately.
   </Card>
-  <Card title="Alumni Members" icon="graduation-cap" href="/features/admin-members#alumni-members">
+  <Card title="Alumni Members" icon="graduation-cap" href="/features/admin-members#alumni-members-panel">
     Read-only list pulled from `GET /member-info/alumni/summary`. Search only — no editing from this panel.
   </Card>
   <Card title="Resource Management" icon="folder" href="/features/admin-overview#resource-management">
@@ -103,7 +103,7 @@ Announcements are fetched from `GET /announcements` and sorted with pinned items
 | Edit   | `/announcements/edit-announcement` | POST |
 | Delete | `/announcements/delete-announcement` | POST |
 
-`CreateAnnouncementModal` uses TinyMCE (keyed by `VITE_TINY_MCE_KEY`) for rich-text description authoring. The `EditAnnouncementModal` uses a plain `<textarea>` and persists draft edits to `localStorage` under the key `modal-announcement-edit-{id}`.
+`CreateAnnouncementModal` uses TinyMCE (keyed by `VITE_TINY_MCE_KEY`) for rich-text description authoring. The `EditAnnouncementModal` uses a plain `<textarea>` for editing and persists draft edits to `localStorage` under the key `modal-announcement-edit-{id}`. On successful save or deliberate discard, that key is cleared.
 
 ## Admin Users
 

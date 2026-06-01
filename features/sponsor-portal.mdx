@@ -37,7 +37,7 @@ if (!authError) {
 ```
 
 <Note>
-  The `ProtectedRoute` component verifies that `role` satisfies `role.type === 'sponsor'` before granting access to `/sponsor`. Any visitor without a valid sponsor session is redirected to `/login`.
+  The `ProtectedRoute` component's `checkRole("sponsor")` helper grants access to `/sponsor`. It handles both the string value `"sponsor"` (set directly by `SponsorAuth`) and an object of the form `{ type: "sponsor", companyName: string }`. Unauthenticated visitors (no session) are redirected to `/login`; authenticated users with the wrong role are redirected to `/auth/Home`.
 </Note>
 
 ## Page Structure — `SponsorHome`
@@ -272,7 +272,7 @@ After deletion, `fetchResources()` is called to refresh the list.
 /sponsor  →  ProtectedRoute  →  SponsorHome
 ```
 
-`ProtectedRoute` checks `role.type === 'sponsor'` (or `role === 'sponsor'` string). Any user with a different role is redirected to `/auth/Home`.
+`ProtectedRoute`'s `checkRole("sponsor")` helper handles both the string `"sponsor"` (set by `SponsorAuth`) and the object form `{ type: "sponsor" }`. Unauthenticated users (no session) are redirected to `/login`; authenticated users without the `sponsor` role are redirected to `/auth/Home`.
 
 ```typescript
 // ProtectedRoute.tsx — sponsor check

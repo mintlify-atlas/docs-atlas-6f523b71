@@ -28,7 +28,7 @@ The `Hero` renders a full-viewport-height (`h-screen`) section using `BAP_Homepa
     Watches the hero element at a 10% visibility threshold. When the hero scrolls out of view the animated scroll-arrow hides itself, keeping the UI clean on the `WhoWeAre` section.
   </Card>
   <Card title="Scroll Arrow" icon="chevron-down">
-    A `ChevronDown` button (Lucide) anchored `bottom-8 right-24` calls `scrollIntoView({ behavior: 'smooth' })` targeting `#who-we-are`. The button is conditionally rendered only while `isVisible` is `true`.
+    A `ChevronDown` button (Lucide) positioned `bottom-4 sm:bottom-6 md:bottom-8 right-8 sm:right-16 md:right-24` calls `scrollIntoView({ behavior: 'smooth' })` targeting `#who-we-are`. The button is conditionally rendered only while `isVisible` is `true`.
   </Card>
 </CardGroup>
 

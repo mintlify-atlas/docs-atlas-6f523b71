@@ -48,31 +48,32 @@ const contactDetails = [
 Two social accounts are linked from a right-side panel. Both open in a new tab (`target="_blank" rel="noopener noreferrer"`):
 
 <CardGroup cols={2}>
-  <Card title="Instagram" icon="camera">
-    **Handle:** `@bapbetatauchapter`
-
-    **URL:** `https://www.instagram.com/bapbetatauchapter/`
-
-    Rendered as a square maroon tile (`bg-[#AF272F]`) with the Instagram SVG icon and a "Instagram" label.
+  <Card title="Instagram-styled tile" icon="camera">
+    Rendered as a square maroon tile (`bg-[#AF272F]`) with the Instagram SVG icon and an "Instagram" label. Uses `staticSocialLinks[0].href` — which in source is the LinkedIn URL (`https://www.linkedin.com/company/bap-betatauchapter/`).
   </Card>
-  <Card title="LinkedIn" icon="linkedin">
-    **Company page:** `bap-betatauchapter`
-
-    **URL:** `https://www.linkedin.com/company/bap-betatauchapter/`
-
-    Rendered as a square LinkedIn-blue tile (`bg-[#0077B5]`) with the LinkedIn SVG icon and a "LinkedIn" label.
+  <Card title="LinkedIn-styled tile" icon="linkedin">
+    Rendered as a square LinkedIn-blue tile (`bg-[#0077B5]`) with the LinkedIn SVG icon and a "LinkedIn" label. Uses `staticSocialLinks[1].href` — which in source is the Instagram URL (`https://www.instagram.com/bapbetatauchapter/`).
   </Card>
 </CardGroup>
 
 ```ts
+// ContactUsPage.tsx — staticSocialLinks definition
 const staticSocialLinks = [
-  { name: "instagram", href: "https://www.instagram.com/bapbetatauchapter/" },
   { name: "linkedin",  href: "https://www.linkedin.com/company/bap-betatauchapter/" },
+  { name: "instagram", href: "https://www.instagram.com/bapbetatauchapter/" },
 ];
+
+// JSX usage — note the index/icon mismatch in source:
+// First tile  → href={staticSocialLinks[0].href}  Instagram icon + maroon bg  → links to LinkedIn URL
+// Second tile → href={staticSocialLinks[1].href}  LinkedIn icon + blue bg     → links to Instagram URL
 ```
 
+<Warning>
+  There is a known href/icon mismatch in `ContactUsPage.tsx`: `staticSocialLinks[0]` holds the LinkedIn URL but is rendered inside the Instagram-styled (maroon) tile, while `staticSocialLinks[1]` holds the Instagram URL but is rendered inside the LinkedIn-styled (blue) tile. The visual labels say "Instagram" and "LinkedIn" correctly, but the destination URLs are swapped in source.
+</Warning>
+
 <Note>
-  Note that the Instagram handle linked from the Contact Us page (`@bapbetatauchapter`) is distinct from the one embedded on the Homepage (`@asubap`). `@asubap` is the chapter's general account embedded on the homepage; `@bapbetatauchapter` is the handle listed on the Contact Us page.
+  The Instagram handle referenced on the Contact Us page (`@bapbetatauchapter`) is distinct from the one embedded on the Homepage (`@asubap`). `@asubap` is the chapter's general Instagram account embedded on the homepage; `@bapbetatauchapter` is the handle listed on the Contact Us page.
 </Note>
 
 ## Page Layout

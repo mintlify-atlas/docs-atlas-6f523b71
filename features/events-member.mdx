@@ -40,8 +40,8 @@ The platform distinguishes between events as seen by members and as seen by admi
       user_rsvped: boolean;         // Current user's RSVP status
       user_attended: boolean;       // Current user's check-in status
       can_check_in: boolean;        // Computed by backend
-      check_in_window?: number;     // Minutes; only present if RSVP'd
-      check_in_radius?: number;     // Metres; only present if RSVP'd
+      check_in_window?: number;     // Only present if RSVP'd
+      check_in_radius?: number;     // Only present if RSVP'd
     };
     ```
 
@@ -80,7 +80,7 @@ const endpoint = session?.access_token
   : `${VITE_BACKEND_URL}/events/public`; // unauthenticated — public subset only
 ```
 
-The user's rank is fetched separately from `GET /member-info/me` so that the page can gate the RSVP and check-in buttons before the event list arrives. Both fetches are refired on `visibilitychange` and `window.focus` events to keep the rank current after tab switches (e.g., after changing rank in another tab).
+The user's rank is fetched separately from `GET /member-info/me` so that the page can gate the RSVP and check-in buttons before the event list arrives. Both fetches are refired on `visibilitychange` and `window.focus` events to keep the rank current after tab switches.
 
 ### Event Partitioning
 
@@ -168,15 +168,15 @@ export const formatDateTime = (date?: string, time?: string | null) => {
 
 <Steps>
   <Step title="User clicks RSVP / Un-RSVP">
-    A confirmation `Modal` is shown with the event name and the action label.
+    A confirmation `Modal` is shown with the event name and the action label (`"RSVP"` or `"Un-RSVP"`).
   </Step>
   <Step title="User confirms">
     The component selects the endpoint based on current state:
 
     ```typescript
     const endpoint = localRSVPed
-      ? `${VITE_BACKEND_URL}/events/unrsvp/${eventId}`   // DELETE RSVP
-      : `${VITE_BACKEND_URL}/events/rsvp/${eventId}`;    // ADD RSVP
+      ? `${VITE_BACKEND_URL}/events/unrsvp/${eventId}`   // cancel RSVP
+      : `${VITE_BACKEND_URL}/events/rsvp/${eventId}`;    // add RSVP
 
     // Both use POST:
     await fetch(endpoint, {
@@ -185,6 +185,7 @@ export const formatDateTime = (date?: string, time?: string | null) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
+      credentials: "include",
     });
     ```
   </Step>
@@ -192,7 +193,7 @@ export const formatDateTime = (date?: string, time?: string | null) => {
     `localRSVPed` is toggled, a `react-hot-toast` message is shown, and the optional `onRSVPChange` callback fires (used by admins to refetch participants).
   </Step>
   <Step title="Full RSVP cap">
-    When `event_limit` is set and `rsvp_count >= event_limit`, the RSVP button renders as gray and disabled — but only if the member has not already RSVP'd (existing RSVPs can always be cancelled).
+    When `event_limit` is set and `rsvp_count >= event_limit`, the RSVP button renders as gray and disabled — but only if the member has not already RSVP'd (existing RSVPs can always be cancelled via the `isRSVPFull && !localRSVPed` check).
   </Step>
 </Steps>
 
@@ -210,6 +211,7 @@ export const formatDateTime = (date?: string, time?: string | null) => {
       eventTime: string,
       eventHours: number
     ): boolean => {
+      if (!eventDate || !eventTime || eventHours === undefined || eventHours === null) return false;
       const start = new Date(`${eventDate}T${eventTime}`);
       const end = new Date(start.getTime() + eventHours * 60 * 60 * 1000);
       const now = new Date();
@@ -223,7 +225,8 @@ export const formatDateTime = (date?: string, time?: string | null) => {
     `checkInWindowMinutes` defaults to `15` if not provided via the `check_in_window` field on the event.
   </Step>
   <Step title="Pre-flight guards">
-    Before requesting location, the component verifies:
+    Before requesting location, the component verifies (in order):
+    - The event is currently in-session
     - `navigator.geolocation` is supported
     - A valid `session.access_token` exists
     - The user has not already checked in (`userAttended || localCheckedIn`)
@@ -263,7 +266,7 @@ export const formatDateTime = (date?: string, time?: string | null) => {
 | State | Button label | Button colour | Disabled? |
 |---|---|---|---|
 | `idle`, not in session | Check In | Gray | ✅ |
-| `idle`, in session, not RSVP'd | Check In | Red | ✅ |
+| `idle`, in session, not RSVP'd | Check In | Red | ❌ (shows toast on click) |
 | `idle`, in session, RSVP'd | Check In | Red | ❌ |
 | `locating` | Getting Location... | Gray | ✅ |
 | `sending` | Checking in... | Gray | ✅ |
@@ -272,7 +275,7 @@ export const formatDateTime = (date?: string, time?: string | null) => {
 | Already attended | Checked In | Gray | ✅ |
 
 <Note>
-  `canCheckIn` (from `MemberEvent.can_check_in`) is received as a prop but the component currently computes in-session state locally via `isEventInSession`. The backend-provided value is stored as `_canCheckIn` (prefixed underscore) and not used directly.
+  `canCheckIn` (from `MemberEvent.can_check_in`) is received as a prop but the component currently computes in-session state locally via `isEventInSession`. The backend-provided value is stored as `_canCheckIn` (prefixed underscore) and not used directly in the button logic.
 </Note>
 
 ## Calendar Subscription
@@ -282,8 +285,16 @@ export const formatDateTime = (date?: string, time?: string | null) => {
 ```typescript
 const shouldShowButton = () => {
   if (!isAuthenticated) return false;
-  if (role?.toLowerCase().includes("sponsor")) return false;
-  if (role?.toLowerCase().includes("alumni")) return false;
+
+  if (typeof role === "string") {
+    const lowerRole = role.toLowerCase();
+    if (lowerRole.includes("sponsor") || lowerRole.includes("alumni")) {
+      return false;
+    }
+  } else if (typeof role === "object" && role !== null && role.type === "sponsor") {
+    return false;
+  }
+
   return true;
 };
 ```

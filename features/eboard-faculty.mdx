@@ -69,10 +69,17 @@ export type EboardFacultyEntry = {
 
 Entries are sorted ascending by `rank` before rendering, with unranked entries (`rank === undefined`) pushed to the end using `9999` as a fallback sort key:
 
-```ts
+```tsx
 [...eboardEntries]
   .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
-  .map((entry, index) => <MemberCard key={index} entry={entry} />)
+  .map((entry, index) => (
+    <div
+      key={index}
+      className="bg-white shadow-xl rounded-lg p-6 flex flex-col items-center text-center"
+    >
+      {/* card content — see Card Content section below */}
+    </div>
+  ))
 ```
 
 The grid uses a three-breakpoint column layout:
@@ -92,7 +99,7 @@ Each entry card is a white `shadow-xl` rounded tile (`p-6`) with centered conten
     Rendered as a `w-32 h-32` circular image (`rounded-full object-cover`) when `profile_photo_url` is present. If the field is absent the photo section is omitted entirely.
   </Card>
   <Card title="Name" icon="identification">
-    Displays `entry.name` or a dash (`"—"`) if `name` is `null`. This handles in-progress board transitions where a seat is defined but not yet filled.
+    Displays `entry.name` or a hyphen (`"-"`) if `name` is `null`. This handles in-progress board transitions where a seat is defined but not yet filled.
   </Card>
   <Card title="Role" icon="briefcase">
     Displayed in maroon (`text-bapred`) below the name. This is the primary identifier for the card.

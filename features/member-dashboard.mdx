@@ -4,18 +4,18 @@ sidebarTitle: "Member Dashboard"
 description: "Personal hub for Beta Alpha Psi members showing profile details, hours breakdown by category, attended events, and quick access to announcements and Slack."
 ---
 
-The Member Dashboard (`/member`) is the primary landing destination for any authenticated `general-member`. It is wrapped in a `ProtectedRoute` and immediately calls `POST /member-info/` to hydrate the member's profile from the backend. The page is split into two side-by-side columns — the left column owned by `MemberDescription` handles identity and profile management, while the right column (`EventMember`) displays live event data. Alumni members see a reduced view: hours, announcements, and the Slack button are all conditionally hidden via `isAlumni()` from `utils/permissions.ts`.
+The Member Dashboard (`/member`) is the primary landing destination for any authenticated `general-member`. It is wrapped in a `ProtectedRoute` and immediately calls `POST /member-info/` to hydrate the member's profile from the backend. The page is anchored by `MemberDescription`, which renders the full left-column profile card and also mounts `EventMember` (the right-column event panel) and `ProfileEditModal` within its JSX tree.
 
 ## Page Architecture
 
-The page composes three components inside `MemberView`:
+`MemberView` composes one top-level component that owns the full authenticated layout:
 
 <CardGroup cols={3}>
   <Card title="MemberDescription" icon="user">
-    Renders the profile card (photo, name, major, email, phone), the hours breakdown, the About section, and the Edit Profile button. Also owns the announcements bell and Slack shortcut.
+    Renders the profile card (photo, name, major, email, phone), the hours breakdown, the About section, and the Edit Profile button. Also owns the announcements bell, the Slack shortcut, and mounts `EventMember` and `ProfileEditModal` internally.
   </Card>
   <Card title="EventMember" icon="calendar">
-    Independently fetches `GET /events` and categorises events into **In-Session**, **Upcoming**, and **Attended**. Uses `EventCard` for each row.
+    Rendered inside `MemberDescription`. Independently fetches `GET /events` and categorises events into **In-Session**, **Upcoming**, and **Attended**. Uses `EventCard` for each row.
   </Card>
   <Card title="ProfileEditModal" icon="pencil">
     A modal layered on top of `MemberDescription` that handles form state, profile-picture upload/delete, and the `POST /member-info/edit-member-info/` save call.
@@ -29,7 +29,7 @@ The page composes three components inside `MemberView`:
     `MemberView` reads the Supabase session from `useAuth()`. If no session exists, `ProtectedRoute` redirects to login before this page mounts.
   </Step>
   <Step title="Fetch member info">
-    `fetchUserDetails()` is called on mount and again whenever the browser tab regains focus (via a `visibilitychange` listener). It calls:
+    `fetchUserDetails()` is called on mount. It calls:
 
     ```http
     POST /member-info/
@@ -44,6 +44,9 @@ The page composes three components inside `MemberView`:
   <Step title="Render MemberDescription">
     All user fields are forwarded as props. `onRefreshUserDetails` (a reference to `fetchUserDetails(false)`) is also passed so child components can trigger a silent refresh — for example, after a successful check-in.
   </Step>
+  <Step title="Visibility-change refresh">
+    `MemberDescription` attaches a `visibilitychange` listener and calls `onRefreshUserDetails()` whenever the browser tab regains focus, keeping hours and rank current after tab switches.
+  </Step>
   <Step title="EventMember fetch">
     `EventMember` runs its own `GET /events` fetch inside `useEffect`. Events are sorted by `event_date` then partitioned by `isEventInSession()` and compared to `now`.
   </Step>
@@ -51,7 +54,7 @@ The page composes three components inside `MemberView`:
 
 ## Profile Fields
 
-The `userDetails` shape returned from the backend and forwarded as props:
+`MemberView` maintains a typed `userDetails` state object whose keys match the backend response from `POST /member-info/`:
 
 ```typescript
 {
@@ -61,18 +64,19 @@ The `userDetails` shape returned from the backend and forwarded as props:
   major: string;
   phone: string;
   graduating_year: string;
-  rank: string;                // "pledge" | "inducted" | "alumni"
-  member_status: string;       // "Looking for Internship" | "Looking for Full-time" | "Not Looking"
+  rank: string;              // "pledge" | "inducted" | "alumni"
+  member_status: string;     // "Looking for Internship" | "Looking for Full-time" | "Not Looking"
   about: string;
   total_hours: string;
   development_hours: string;
   professional_hours: string;
   service_hours: string;
   social_hours: string;
-  profile_photo_url?: string;
   event_attendance: any[];
 }
 ```
+
+These values are passed as individual props to `MemberDescription`, which maps them to the `MemberDetail` shape (camelCase) for internal state and the `ProfileEditModal`.
 
 <Note>
   `rank` drives the `isAlumni()` check throughout the dashboard. When `rank === "alumni"`, the hours breakdown row, the announcements bell, and the Slack button are all removed from the DOM.
@@ -104,7 +108,7 @@ Clicking **Edit Profile** opens `ProfileEditModal`. The modal uses a `useRef` sn
     | Email | `email` | ✅ | Disabled — cannot change |
     | Phone Number | `tel` | ✅ | |
     | Major(s) | `text` | ✅ | Free-text; multiple majors as one string |
-    | Graduation Year | `text` | ✅ | |
+    | Graduation Year | `text` | ✅ | Maps to `graduationDate` in `MemberDetail` |
     | Status | `select` | ✅ | `Looking for Internship` / `Looking for Full-time` / `Not Looking` |
     | About | `textarea` | ✅ | Minimum 1 non-`"N/A"` character |
   </Tab>
@@ -164,19 +168,20 @@ On success the parent `onSave` callback updates local `profileData` state, and a
 </Accordion>
 
 <Accordion title="Attended Events">
-  Sourced from `eventAttendance` prop (the `event_attendance` array from `POST /member-info/`). Items are sorted descending by `event_date` (most recent first). Each item is adapted to the `Event` shape before passing to `EventCard`:
+  Sourced from the `eventAttendance` prop (the `event_attendance` array from `POST /member-info/`), passed from `MemberView` through `MemberDescription` into `EventMember`. Items are sorted descending by `event_date` (most recent first). Each item is adapted to the `Event` shape before passing to `EventCard`:
 
   ```typescript
   const eventForCard: Event = {
     id: attendedEvent.event_id?.toString() || index.toString(),
     event_name: attendedEvent.event_name || 'Event',
+    event_description: attendedEvent.event_description || 'No description available',
+    rsvp_count: 0,
+    attending_count: 0,
+    event_lat: null,
+    event_long: null,
     user_rsvped: false,
     user_attended: true,  // always true
     can_check_in: false,
-    event_lat: null,
-    event_long: null,
-    rsvp_count: 0,
-    attending_count: 0,
     // ...remaining fields from attendedEvent
   };
   ```
@@ -237,6 +242,6 @@ When `isAlumni(rank)` returns `true`:
 
 To add a new hours category:
 1. Add the backend key to the `userDetails` state object in `MemberView`.
-2. Pass it as a new prop from `MemberView → MemberDescription`.
+2. Pass it as a new prop from `MemberView → MemberDescription → EventMember` as needed.
 3. Add a corresponding entry to the `MemberDetail` type in `types/index.ts`.
 4. Render it alongside the existing hour rows in `MemberDescription`.

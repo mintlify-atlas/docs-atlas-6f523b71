@@ -1,7 +1,7 @@
 ---
-title: "Authentication Architecture for BAP Beta Tau Frontend"
+title: "Authentication Architecture for the BAP Beta Tau Frontend"
 sidebarTitle: "Authentication"
-description: "Full documentation of the Google OAuth flow, Supabase session management, backend role fetching, the useAuth() hook, 30-second revalidation, and role types."
+description: "Full documentation of the Google OAuth flow, Supabase session management, backend role fetching, the useAuth() hook, and 30-second revalidation."
 ---
 
 Authentication in the BAP Beta Tau frontend is a two-stage process. The first stage is identity verification: the user signs in with Google through Supabase, which establishes a session and stores a JWT access token in `localStorage`. The second stage is authorization: the application takes that JWT and sends it to the backend's `POST /users` endpoint along with the user's email, receiving back a role object that determines which pages the user can access. Both stages must succeed for `isAuthenticated` to be `true`. This separation of concerns — Supabase owns identity, the backend owns authorization — means the frontend never queries the database directly and all member data is gated by the backend's own access control logic.
@@ -56,7 +56,7 @@ The Supabase client is created once in `src/context/auth/supabaseClient.ts` and 
 // src/context/auth/supabaseClient.ts
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL     = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_URL      = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -68,10 +68,6 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 ```
 
 Setting `storage: localStorage` means the Supabase session (including the JWT access token and refresh token) survives browser tab closures and page refreshes. On the next visit, `getSession()` returns the cached session immediately, so the user does not have to re-authenticate.
-
-<Note>
-  A migration to HttpOnly cookies for session storage is planned. HttpOnly cookies are inaccessible to JavaScript, which eliminates the XSS risk of storing JWTs in `localStorage`. Until that migration is complete, session tokens remain in `localStorage`. Do not store additional sensitive data in `localStorage` in the meantime.
-</Note>
 
 ## The `AuthProvider` Component
 
@@ -339,7 +335,3 @@ export const canAccessFeature = (
 ## Sign-Out Flow
 
 Sign-out is handled by the `LogOut` component (`src/components/logOut/LogOut.tsx`), which calls `supabase.auth.signOut()`. Supabase clears the session from `localStorage` and fires `onAuthStateChange` with `newSession = null`. The `AuthProvider` listener then sets `session = null`, `role = null`, and `loading = false`. Because `isAuthenticated` becomes `false`, the `Navbar` re-renders with the public nav links, and any protected route the user is on will redirect them to `/login` on the next render.
-
-## Planned: HttpOnly Cookie Migration
-
-The current implementation stores the Supabase session (JWT access token and refresh token) in `localStorage`. While convenient, `localStorage` is accessible to any JavaScript running on the page, making it a target for XSS attacks. The planned migration will switch `storage` in the Supabase client config to use HttpOnly cookies managed by a thin server-side proxy, so that session tokens are never visible to client JavaScript. Until this migration is complete, keep the CSP headers on the Vercel deployment restrictive and avoid injecting third-party scripts that could read `localStorage`.

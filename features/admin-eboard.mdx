@@ -1,7 +1,7 @@
 ---
 title: "Admin Eboard Management — Roles, Emails & Display Order"
 sidebarTitle: "Eboard"
-description: "Developer reference for creating, editing, and deleting eboard role entries: rank ordering, role_email vs member email, the EboardModal form, and the /eboard API endpoints."
+description: "Reference for EboardManagement: CRUD for eboard role entries, rank display ordering, role_email vs member email, and the /eboard API endpoints."
 ---
 
 The Eboard Management section is a self-contained `EboardManagement` component rendered at the bottom of the Admin Dashboard, spanning the full two-column grid width. It displays all current e-board role entries — each representing a chapter position such as "President" or "VP of Finance" — with full CRUD support. Unlike the General Members panel, which manages *user accounts*, the Eboard section manages *display entries* that appear on the public-facing Eboard page. Each entry links a chapter role (with its own role-specific email address) to a member account (via the member's personal email). Entries are ordered by a numeric `rank` field that controls display sequence on the public page.

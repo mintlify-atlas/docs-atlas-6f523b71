@@ -24,9 +24,11 @@ interface BackendSponsor {
   id?: number;
   company_name?: string;
   about?: string;
-  links?: string | null;   // May be JSON string, CSV, or array
+  links?: string | null;       // May be JSON string, CSV, or array
   pfp_url?: string;
+  resources?: SponsorResource[]; // Not populated by /sponsors/summary
   tier?: string;
+  emails?: string[];             // Not populated by /sponsors/summary
 }
 ```
 

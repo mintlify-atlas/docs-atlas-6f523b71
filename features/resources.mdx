@@ -12,7 +12,10 @@ On mount, `ResourcesPage` inspects the `role` from `useAuth()`. If the role is `
 
 ```typescript
 useEffect(() => {
-  if (role === "sponsor" || role?.type === "sponsor") {
+  if (
+    role === "sponsor" ||
+    (typeof role === "object" && role !== null && "type" in role && role.type === "sponsor")
+  ) {
     window.history.length > 1
       ? window.history.back()
       : navigate("/auth/Home", { replace: true });
@@ -96,7 +99,7 @@ const fuse = useMemo(() => new Fuse(categories, fuseOptions), [categories]);
 
 const filteredCategories = useMemo(() => {
   if (!searchQuery.trim()) return categories;
-  return fuse.search(searchQuery).map((result) => ({ ...result.item }));
+  return fuse.search(searchQuery).map((result) => ({ ...result.item })).filter(Boolean);
 }, [searchQuery, categories, fuse]);
 ```
 
@@ -197,7 +200,7 @@ Clicking the eye icon opens `ResourcePreviewModal` with the selected resource. T
 
   1. Update the `RawCategoryData.resource_type` union type in `ResourcesPage`.
   2. Add `"external"` to the `Category.resourceType` type.
-  3. Add a `filteredExternalCategories` filter and a new `<>` section in the JSX below the Firm Resources section.
+  3. Add a `filteredExternalCategories` filter and a new section in the JSX below the Firm Resources section.
   4. Update the backend to return `resource_type: "external"` for the new categories.
 </Accordion>
 
