@@ -1,0 +1,276 @@
+---
+title: "Admin Event Management — Create, Edit & Hidden Buckets"
+sidebarTitle: "Events"
+description: "Developer reference for admin event management: full create/edit form fields, the AdminEvent type, hidden administrative buckets, RSVP and attendee data, and check-in configuration."
+---
+
+Event management in the Admin Dashboard is handled by the `AdminEventsSection` component, which is not rendered directly inside `Admin.tsx` — it is a standalone section component that wraps `EventListShort` and toggles between two views: **Standard Events** (visible to members) and **Hidden / Buckets** (admin-only). E-board users can create new events via `CreateEventModal`, edit existing ones via `EditEventModal`, and toggle an event's hidden status through the `is_hidden` flag. The `AdminEvent` type extends the base `Event` type with admin-exclusive fields such as `event_rsvped`, `event_attending`, `is_hidden`, `check_in_window`, and `check_in_radius`.
+
+## The AdminEvent Type
+
+The `AdminEvent` type is defined in `src/types/index.ts` and is the authoritative shape for events viewed by e-board users. It extends `BaseEvent` with fields that are only exposed to admins.
+
+```ts
+// src/types/index.ts
+
+export type BaseEvent = {
+  id: string;
+  event_name: string;
+  event_description: string;
+  event_location?: string;
+  event_date: string;
+  event_time?: string;
+  dress_code?: string;
+  event_hours?: number;
+  event_hours_type?: string;
+  sponsors_attending?: string[];
+  event_limit?: number;
+  rsvp_count: number;
+  attending_count: number;
+};
+
+export type AdminEvent = BaseEvent & {
+  event_lat: number;
+  event_long: number;
+  event_rsvped: string[];      // User IDs who RSVPed
+  event_attending: string[];   // User IDs who checked in
+  is_hidden: boolean;          // Hidden from member feed
+  check_in_window: number;     // Minutes before/after event time when check-in is open
+  check_in_radius: number;     // Meters radius for geo-fenced check-in
+  user_rsvped: boolean;
+  user_attended: boolean;
+};
+```
+
+The `isAdminEvent` type guard checks for the `is_hidden` property:
+
+```ts
+const isAdminEvent = (event: Event): event is AdminEvent => {
+  return 'is_hidden' in event;
+};
+```
+
+This guard is used in `AdminEventsSection` and `EditEventModal` to safely branch logic that only applies to the admin-facing event shape.
+
+## View Modes: Standard vs. Hidden Buckets
+
+`AdminEventsSection` maintains a local `viewMode` state (`'standard'` | `'hidden'`). A pill-style tab bar at the top of the section switches between the two modes.
+
+```ts
+const visibleUpcoming = upcomingEvents.filter(e => isAdminEvent(e) && !e.is_hidden);
+const visiblePast     = pastEvents.filter(e => isAdminEvent(e) && !e.is_hidden);
+const hiddenEvents    = [...upcomingEvents, ...pastEvents].filter(e => isAdminEvent(e) && e.is_hidden);
+```
+
+<Tabs>
+  <Tab title="Standard Events">
+    Shows two sub-lists rendered by `EventListShort`:
+    - **Upcoming Events** — non-hidden events with a future `event_date`
+    - **Past Events** — non-hidden events with a past `event_date`, displayed in a `max-h-72 overflow-y-auto` scrollable container
+
+    Members see this same feed on the public events page.
+  </Tab>
+  <Tab title="Hidden / Buckets">
+    Shows all events where `is_hidden === true`. These events are completely invisible in the member-facing feed. They are used to grant hours to members without requiring physical attendance at a "real" event — for example, granting professional development hours for completing a certification or attending an external conference.
+
+    The tab is labelled **Hidden / Buckets** and shows a "Not visible to members" badge.
+  </Tab>
+</Tabs>
+
+<Note>
+  Hidden events participate in the same hours-granting system as standard events. The `event_hours` and `event_hours_type` fields are still required when creating a bucket so that the backend correctly credits the right hours category when members are manually added.
+</Note>
+
+---
+
+## Creating an Event
+
+`CreateEventModal` is mounted via `React.createPortal` onto `document.body` (z-index `9999`). It owns all form state locally and uses `useScrollLock(true)` to prevent background scroll while open.
+
+### Form Fields
+
+<Accordion title="Required Fields">
+
+| Field | State Variable | Type | API Key | Notes |
+|---|---|---|---|---|
+| Event Title | `eventTitle` | `string` | `event_name` | Plain text, trimmed on submit |
+| Description | `description` | `string` | `event_description` | Plain text `<textarea>`, 3 rows |
+| Location | `location.name` | `string` | `event_location` | Set by `LocationPicker` component |
+| Date | `date` | `string` | `event_date` | HTML date input (`YYYY-MM-DD`) |
+| Time | `time` | `string` | `event_time` | HTML time input (`HH:MM`) |
+| Event Hours | `hours` | `string` | `event_hours` | Numeric, parsed with `parseFloat`, step 0.5 |
+| Hours Type | `hoursType` | `string` | `event_hours_type` | Select: `professional`, `social`, `service`, `development`, `n/a` |
+| Check-in Window | `checkInWindow` | `number` | `check_in_window` | Minutes, default `15` |
+| Check-in Radius | `checkInRadius` | `number` | `check_in_radius` | Meters, default `50` |
+| Event Limit | `eventLimit` | `number` | `event_limit` | Max attendees, default `100` |
+
+</Accordion>
+
+<Accordion title="Optional Fields">
+
+| Field | State Variable | Type | API Key | Notes |
+|---|---|---|---|---|
+| Dress Code | `dressCode` | `string` | `dress_code` | Free-text, e.g., `"Business Professional"` |
+| Sponsors Attending | `sponsors` | `string[]` | `sponsors_attending` | Multi-select via `SponsorMultiSelect` component |
+| Latitude | `location.latitude` | `number` | `event_lat` | Set by `LocationPicker`, default `33.4242` (ASU) |
+| Longitude | `location.longitude` | `number` | `event_long` | Set by `LocationPicker`, default `-111.9281` (ASU) |
+| Hidden | `isHidden` | `boolean` | `is_hidden` | Checkbox; makes event invisible in member feed |
+
+</Accordion>
+
+### Request Payload
+
+```ts
+const eventData = {
+  event_name: eventTitle.trim(),
+  event_description: description.trim(),
+  event_location: location.name.trim() || "Unnamed Location",
+  event_lat: location.latitude,
+  event_long: location.longitude,
+  event_date: date,
+  event_time: time,
+  event_hours: parseFloat(hours),
+  event_hours_type: hoursType,
+  dress_code: dressCode.trim(),
+  sponsors_attending: sponsors,
+  check_in_window: checkInWindow,
+  check_in_radius: checkInRadius,
+  event_limit: eventLimit,
+  is_hidden: isHidden,
+};
+
+// POST /events/add-event
+```
+
+### Validation
+
+All required fields are validated client-side before the request is sent. Errors are stored per-field in a `FormErrors` object and displayed inline below the relevant input. The form does not submit if any required field is empty or if `hours` is not a non-negative number.
+
+### Unsaved Changes Guard
+
+`CreateEventModal` computes `hasChanges()` by JSON-serializing current state vs. the `initialStateRef`. If the user attempts to close with unsaved changes, a `ConfirmationModal` prompts:
+
+```
+"You have unsaved changes. Are you sure you want to close this form?"
+```
+
+---
+
+## Editing an Event
+
+`EditEventModal` mirrors `CreateEventModal` but pre-populates its form from the `eventToEdit` prop. It additionally persists draft edits to `localStorage` under the key `modal-event-edit-{eventId}` whenever `formData` differs from `initialStateRef`. On successful save or deliberate discard, the key is cleared.
+
+### Edit Endpoint
+
+```ts
+// POST /events/edit-event
+const eventDataToUpdate = {
+  event_id: eventToEdit.id,
+  name: formData.eventTitle.trim(),
+  date: formData.date,
+  location: {
+    name: formData.location.name.trim(),
+    latitude: formData.location.latitude,
+    longitude: formData.location.longitude,
+  },
+  description: formData.description.trim(),
+  time: formData.time,
+  dress_code: formData.dressCode.trim(),
+  sponsors: formData.sponsors,
+  check_in_window: formData.checkInWindow,
+  check_in_radius: formData.checkInRadius,
+  event_limit: parseInt(formData.eventLimit),
+  is_hidden: formData.isHidden,
+  // event_hours and event_hours_type only included if set:
+  ...(formData.hours.trim() && { event_hours: parseFloat(formData.hours) }),
+  ...(formData.hoursType && { event_hours_type: formData.hoursType }),
+};
+```
+
+After a successful save, the `onEventUpdated` callback receives a locally-constructed `AdminEvent` object for immediate UI refresh — the page does not need to re-fetch the full event list.
+
+---
+
+## Location Picker
+
+Both create and edit modals use the `LocationPicker` component (`src/components/common/LocationPicker.tsx`), which wraps Leaflet + `leaflet-geosearch`. It exposes a `LocationObject`:
+
+```ts
+interface LocationObject {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+```
+
+The default coordinates `(33.4242, -111.9281)` correspond to Arizona State University's main campus.
+
+---
+
+## Sponsor Multi-Select
+
+The `SponsorMultiSelect` component (`src/components/common/SponsorMultiSelect.tsx`) lets e-board users tag which sponsors are attending an event. Selected values are stored as an array of company name strings that maps to the `sponsors_attending` API field.
+
+---
+
+## Check-In Configuration
+
+The `check_in_window` and `check_in_radius` fields control the geo-fenced mobile check-in feature:
+
+| Field | Unit | Default | Purpose |
+|---|---|---|---|
+| `check_in_window` | Minutes | 15 | How many minutes before/after `event_time` the check-in button is active |
+| `check_in_radius` | Meters | 50 | Maximum GPS distance from `event_lat/event_long` for a valid check-in |
+
+These values are only surfaced in the `AdminEvent` type — `MemberEvent` only receives `check_in_window` and `check_in_radius` if the member has RSVP'd, and only exposes a boolean `can_check_in` rather than the raw values.
+
+---
+
+## RSVP and Attendance Data
+
+`AdminEvent` carries the full user ID arrays:
+
+```ts
+event_rsvped: string[];     // IDs of users who RSVPed
+event_attending: string[];  // IDs of users who successfully checked in
+rsvp_count: number;         // Aggregate count (from BaseEvent)
+attending_count: number;    // Aggregate count (from BaseEvent)
+```
+
+The detailed participant objects (name + email per user) are fetched from a separate endpoint:
+
+```
+GET /events/:eventId/participants
+```
+
+Which returns `EventParticipants`:
+
+```ts
+export type EventParticipants = {
+  event_id: string;
+  event_name: string;
+  rsvped_users: { user_id: string; name: string; user_email: string }[];
+  attending_users: {
+    user_id: string;
+    name: string;
+    user_email: string;
+    checked_in_at?: string;
+  }[];
+  rsvp_count: number;
+  attending_count: number;
+};
+```
+
+<Tip>
+  Use `rsvp_count` and `attending_count` from `BaseEvent` for display in list rows (these are aggregates, always present). Only call `/events/:eventId/participants` when opening a detail/attendee modal to avoid fetching large arrays unnecessarily.
+</Tip>
+
+---
+
+## API Reference
+
+| Operation | Method | Endpoint | Key Body Fields |
+|---|---|---|---|
+| Create event | POST | `/events/add-event` | `event_name`, `event_date`, `event_time`, `event_hours`, `event_hours_type`, `is_hidden`, `check_in_window`, `check_in_radius`, `event_limit` |
+| Edit event | POST | `/events/edit-event` | `event_id`, `name`, `date`, `location`, `is_hidden`, `check_in_window`, `check_in_radius` |
+| Get participants | GET | `/events/:eventId/participants` | — |

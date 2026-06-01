@@ -1,0 +1,473 @@
+---
+title: "Cookie Migration: HttpOnly Cookie Auth Architecture Plan"
+sidebarTitle: "Cookie Migration"
+description: "Documents the planned migration from localStorage/Supabase client auth to HttpOnly cookie-based authentication, with security rationale, code snippets, and four migration phases."
+---
+
+The BAP Beta Tau platform currently stores Supabase session tokens in `localStorage`, which is the default behaviour of the Supabase JS client. While simple to implement, localStorage is accessible to any JavaScript running on the page, creating an XSS token-theft risk. This document outlines the complete migration plan — sourced from `COOKIE_MIGRATION.md` — to move authentication to HttpOnly cookies managed by the backend.
+
+<Note>
+  This migration is **planned but not yet implemented**. The current codebase uses `localStorage`-backed Supabase sessions as documented in [Auth Context](/reference/auth-context). Use this page as the engineering specification for the migration.
+</Note>
+
+---
+
+## Current vs. Target Architecture
+
+<CardGroup cols={2}>
+  <Card title="Current Architecture" icon="triangle-exclamation">
+    ```
+    Browser (localStorage) ←→ Supabase Auth
+    ```
+    - Supabase JS client stores `access_token` and `refresh_token` in `localStorage`
+    - Frontend reads tokens and passes them as `Authorization: Bearer` headers
+    - Any XSS vulnerability can steal the token
+  </Card>
+  <Card title="Target Architecture" icon="shield-check">
+    ```
+    Browser ←→ Backend API (HttpOnly Cookies) ←→ Supabase Auth
+    ```
+    - Backend sets `HttpOnly; Secure; SameSite=Strict` cookies on login
+    - Frontend never touches tokens — cookies are sent automatically
+    - XSS attacks cannot read `HttpOnly` cookies
+  </Card>
+</CardGroup>
+
+---
+
+## Security Benefits
+
+| Concern | localStorage (current) | HttpOnly Cookies (target) |
+|---|---|---|
+| XSS token theft | ❌ Vulnerable | ✅ Protected |
+| JavaScript access | ❌ Readable by any script | ✅ Inaccessible to JS |
+| CSRF protection | ❌ None | ✅ `SameSite=Strict` |
+| Expiration control | ❌ Manual | ✅ `maxAge` in cookie |
+| Audit trail | ❌ Client-only | ✅ Server-side logs |
+
+---
+
+## Backend Changes
+
+### Step 1: Install Dependencies
+
+```bash
+npm install cookie-parser jsonwebtoken @supabase/supabase-js
+```
+
+### Step 2: Auth Middleware
+
+**File: `backend/middleware/auth.js`**
+
+```javascript
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY  // Server-side key
+);
+
+async function validateSession(req, res, next) {
+  const sessionToken = req.cookies.session_token;
+
+  if (!sessionToken) {
+    return res.status(401).json({ error: 'No session found' });
+  }
+
+  const { data: { user }, error } = await supabase.auth.getUser(sessionToken);
+
+  if (error || !user) {
+    res.clearCookie('session_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/'
+    });
+    return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  req.user = user;
+  req.sessionToken = sessionToken;
+  next();
+}
+
+module.exports = { validateSession };
+```
+
+### Step 3: Auth Routes
+
+**File: `backend/routes/auth.js`**
+
+The cookie configuration used for all auth cookies:
+
+```javascript
+const COOKIE_OPTIONS = {
+  httpOnly: true,                               // No JS access
+  secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
+  sameSite: 'strict',                           // CSRF protection
+  maxAge: 7 * 24 * 60 * 60 * 1000,             // 7 days
+  path: '/'
+};
+```
+
+<Tabs>
+  <Tab title="POST /auth/login">
+    ```javascript
+    router.post('/auth/login', async (req, res) => {
+      const { email, password } = req.body;
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email, password
+      });
+
+      if (error) return res.status(401).json({ error: error.message });
+
+      // Set HttpOnly cookies — tokens never reach the browser JS
+      res.cookie('session_token', data.session.access_token, COOKIE_OPTIONS);
+      res.cookie('refresh_token', data.session.refresh_token, COOKIE_OPTIONS);
+
+      // Return user info only — NOT tokens
+      res.json({ user: { id: data.user.id, email: data.user.email } });
+    });
+    ```
+  </Tab>
+  <Tab title="POST /auth/logout">
+    ```javascript
+    router.post('/auth/logout', async (req, res) => {
+      const sessionToken = req.cookies.session_token;
+
+      if (sessionToken) {
+        await supabase.auth.admin.signOut(sessionToken);
+      }
+
+      res.clearCookie('session_token', { ...COOKIE_OPTIONS, maxAge: 0 });
+      res.clearCookie('refresh_token', { ...COOKIE_OPTIONS, maxAge: 0 });
+
+      res.json({ message: 'Logged out successfully' });
+    });
+    ```
+  </Tab>
+  <Tab title="GET /auth/session">
+    ```javascript
+    router.get('/auth/session', async (req, res) => {
+      const sessionToken = req.cookies.session_token;
+      const refreshToken = req.cookies.refresh_token;
+
+      if (!sessionToken) {
+        return res.status(401).json({ error: 'No session found' });
+      }
+
+      const { data: { user }, error } = await supabase.auth.getUser(sessionToken);
+
+      if (error && refreshToken) {
+        // Try refreshing the session
+        const { data, error: refreshError } = await supabase.auth.refreshSession({
+          refresh_token: refreshToken
+        });
+
+        if (!refreshError && data.session) {
+          res.cookie('session_token', data.session.access_token, COOKIE_OPTIONS);
+          res.cookie('refresh_token', data.session.refresh_token, COOKIE_OPTIONS);
+          return res.json({ user: { id: data.user.id, email: data.user.email } });
+        }
+
+        res.clearCookie('session_token', { ...COOKIE_OPTIONS, maxAge: 0 });
+        res.clearCookie('refresh_token', { ...COOKIE_OPTIONS, maxAge: 0 });
+        return res.status(401).json({ error: 'Session expired' });
+      }
+
+      res.json({ user: { id: user.id, email: user.email } });
+    });
+    ```
+  </Tab>
+  <Tab title="POST /auth/google">
+    ```javascript
+    router.post('/auth/google', async (req, res) => {
+      const { token } = req.body; // Google ID token
+
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token
+      });
+
+      if (error) return res.status(401).json({ error: error.message });
+
+      res.cookie('session_token', data.session.access_token, COOKIE_OPTIONS);
+      res.cookie('refresh_token', data.session.refresh_token, COOKIE_OPTIONS);
+
+      res.json({ user: { id: data.user.id, email: data.user.email } });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+### Step 4: Update CORS Configuration
+
+CORS must allow credentials for cookies to be sent cross-origin:
+
+```javascript
+// backend/server.js
+app.use(cookieParser());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true, // CRITICAL: allows cookies to be sent
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+```
+
+### Step 5: Update `/users` Endpoint
+
+After migration, `/users` reads the user from `req.user` (set by middleware) instead of from the `Authorization` header:
+
+```javascript
+router.post('/users', validateSession, async (req, res) => {
+  const userEmail = req.user.email; // Injected by validateSession middleware
+
+  const user = await db.query('SELECT * FROM members WHERE email = $1', [userEmail]);
+
+  if (!user || user.is_archived) {
+    res.clearCookie('session_token', { /* COOKIE_OPTIONS */ });
+    res.clearCookie('refresh_token', { /* COOKIE_OPTIONS */ });
+    return res.status(403).json({ error: 'Member is archived' });
+  }
+
+  res.json({ type: user.role, companyName: user.company_name });
+});
+```
+
+---
+
+## Frontend Changes
+
+### Step 1: New Auth Service
+
+**File: `src/services/authService.ts`**
+
+```typescript
+const API_URL = import.meta.env.VITE_BACKEND_URL;
+
+export const authService = {
+  async login(email: string, password: string) {
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', // CRITICAL: sends cookies
+      body: JSON.stringify({ email, password })
+    });
+    if (!response.ok) throw new Error((await response.json()).error || 'Login failed');
+    return response.json();
+  },
+
+  async googleLogin(idToken: string) {
+    const response = await fetch(`${API_URL}/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ token: idToken })
+    });
+    if (!response.ok) throw new Error((await response.json()).error || 'Google login failed');
+    return response.json();
+  },
+
+  async logout() {
+    await fetch(`${API_URL}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include'
+    });
+  },
+
+  async getSession() {
+    const response = await fetch(`${API_URL}/auth/session`, {
+      credentials: 'include'
+    });
+    if (!response.ok) return null;
+    return response.json();
+  },
+
+  async getUserRole(email: string) {
+    const response = await fetch(`${API_URL}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', // Cookies sent automatically — no Bearer header needed
+      body: JSON.stringify({ user_email: email })
+    });
+    if (!response.ok) throw new Error((await response.json()).error || 'Failed to fetch role');
+    return response.json();
+  }
+};
+```
+
+### Step 2: Updated Auth Provider
+
+The new `AuthProvider` drops the Supabase client entirely for auth operations and uses `authService` instead:
+
+```typescript
+// Key changes from current authProvider.tsx:
+
+// REMOVE: import { supabase } from "./supabaseClient.ts";
+// ADD:    import { authService } from "../../services/authService";
+
+// REMOVE: Session type from @supabase/supabase-js
+// ADD:    Custom User type: { id: string; email: string }
+
+// Context value changes:
+interface AuthContextType {
+  user: User | null;          // replaces: session: Session | null
+  role: RoleType;
+  loading: boolean;
+  authError: string | null;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  googleLogin: (idToken: string) => Promise<void>;
+  logout: () => Promise<void>;
+  // REMOVED: setSession, setRole, setAuthError (no longer needed externally)
+}
+```
+
+### Step 3: Update All Fetch Calls
+
+**Every** authenticated API call must add `credentials: 'include'` — this tells the browser to send the HttpOnly cookie with the request:
+
+```typescript
+// Before (current pattern):
+const response = await fetch(`${VITE_BACKEND_URL}/events`, {
+  headers: { Authorization: `Bearer ${session.access_token}` }
+});
+
+// After (cookie pattern):
+const response = await fetch(`${VITE_BACKEND_URL}/events`, {
+  credentials: 'include' // Cookie is sent automatically
+  // No Authorization header needed
+});
+```
+
+Find all fetch calls that need updating:
+
+```bash
+grep -r "fetch(" Frontend/src/ | grep -v "node_modules"
+```
+
+---
+
+## Migration Phases
+
+<Steps>
+  <Step title="Phase 1: Backend Setup">
+    - Install `cookie-parser` dependency
+    - Create `middleware/auth.js` with `validateSession`
+    - Create `routes/auth.js` with login / logout / session / refresh / Google endpoints
+    - Update `routes/users.js` to use cookie middleware
+    - Enable CORS with `credentials: true`
+    - Add `SUPABASE_SERVICE_ROLE_KEY` to backend environment variables
+    - **Test with curl** before touching the frontend
+  </Step>
+  <Step title="Phase 2: Frontend Migration">
+    - Create `src/services/authService.ts`
+    - Rewrite `src/context/auth/authProvider.tsx` to use `authService`
+    - Update login page to call `authService.login()` / `authService.googleLogin()`
+    - Update logout component to call `authService.logout()`
+    - Add `credentials: 'include'` to all `fetch()` calls
+    - Remove Supabase client auth imports (keep client only if used for non-auth operations)
+  </Step>
+  <Step title="Phase 3: Testing and Validation">
+    Verify each flow end-to-end:
+    - ✅ Email/password login sets cookies
+    - ✅ Google OAuth login sets cookies
+    - ✅ Authenticated API requests send cookies automatically
+    - ✅ Archiving a member clears cookies within 30 seconds
+    - ✅ Token refresh sets new cookies
+    - ✅ Logout clears cookies and redirects
+    - ✅ Session persists across page refreshes
+    - ✅ Works in Chrome, Firefox, Safari
+  </Step>
+  <Step title="Phase 4: Security Hardening">
+    - Set `Secure: true` in production (HTTPS-only)
+    - Confirm `SameSite: 'strict'` is set
+    - Add rate limiting on auth endpoints (5 req / 15 min)
+    - Install and configure `helmet.js` for security headers
+    - Add Content Security Policy headers
+    - Set up HTTPS redirect in production
+    - Enable audit logging for all auth events
+    - Restrict CORS `origin` to production domain only
+  </Step>
+</Steps>
+
+---
+
+## Security Hardening Code
+
+### Rate Limiting
+
+```javascript
+const rateLimit = require('express-rate-limit');
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,                    // 5 requests per window per IP
+  message: 'Too many login attempts, please try again later'
+});
+
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/google', authLimiter);
+```
+
+### Helmet.js Security Headers
+
+```javascript
+const helmet = require('helmet');
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,       // 1 year
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+```
+
+---
+
+## Rollback Plan
+
+If migration causes critical issues:
+
+<Steps>
+  <Step title="Revert frontend">
+    Restore `src/context/auth/authProvider.tsx` from git. Remove `src/services/authService.ts`. Remove `credentials: 'include'` from fetch calls.
+  </Step>
+  <Step title="Disable backend auth routes">
+    Comment out or remove the new cookie-based auth routes. Keep existing `Authorization: Bearer` header validation in place.
+  </Step>
+  <Step title="Verify old flow">
+    Confirm `localStorage`-backed Supabase sessions work for login, logout, and protected routes.
+  </Step>
+</Steps>
+
+---
+
+## Key Implementation Notes
+
+<Accordion title="Development vs. Production cookie security">
+  In development (`NODE_ENV !== 'production'`), set `secure: false` so cookies work over HTTP (`localhost`). In production, `secure: true` enforces HTTPS. The `process.env.NODE_ENV` check in `COOKIE_OPTIONS` handles this automatically.
+</Accordion>
+
+<Accordion title="Cross-domain considerations">
+  If the frontend (`asubap.com`) and backend (`asubap-backend.vercel.app`) are on different domains, `SameSite: 'strict'` will block cross-site cookie sending. You may need `SameSite: 'none'` + `Secure: true` for cross-domain setups, or proxy the API through the same domain.
+</Accordion>
+
+<Accordion title="Cookie size limits">
+  Browser cookies are limited to 4 KB each. Supabase JWTs are typically 200–400 bytes — well within this limit.
+</Accordion>
+
+<Accordion title="Mobile app compatibility">
+  HttpOnly cookies work in mobile web browsers and web views. Native mobile apps (iOS/Android) that bypass the browser's cookie store will need a different token delivery mechanism.
+</Accordion>

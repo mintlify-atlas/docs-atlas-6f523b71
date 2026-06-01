@@ -1,0 +1,262 @@
+---
+title: "Admin Sponsor Management — Tiers, CRUD & Profiles"
+sidebarTitle: "Sponsors"
+description: "Developer reference for managing sponsors in the Admin Dashboard: tier system, adding and deleting sponsors, updating bio and links, passcode mechanics, and the SponsorList component."
+---
+
+The Sponsors section of the Admin Dashboard provides full lifecycle management for chapter sponsors. Sponsor data is loaded on dashboard mount via `GET /sponsors/` and stored in two parallel arrays — `sponsors[]` (company names) and `tiers[]` (corresponding tier strings) — indexed in sync. The `SponsorList` component renders these pairs as interactive list rows supporting tier changes, profile editing, and deletion. Adding a sponsor is handled by `AddSponsorModal`, which collects the company name, tier, email list, and a passcode. All destructive and mutating actions flow through the centralized `ConfirmDialog` in `Admin.tsx`.
+
+## Tier System
+
+Every sponsor is assigned one of four tiers. Tiers affect how sponsors are displayed in the public-facing sponsor page (ordering, badge color) and can be changed at any time from the admin panel.
+
+| Tier | Value |
+|---|---|
+| Platinum | `platinum` |
+| Gold | `gold` |
+| Silver | `silver` |
+| Bronze | `bronze` |
+
+The `AddSponsorModal` defaults new sponsors to `"bronze"`. The `SponsorList` renders an inline `<select>` per row that triggers a tier change on change.
+
+---
+
+## Fetching Sponsors
+
+On mount, `Admin.tsx` calls:
+
+```ts
+GET /sponsors/
+Authorization: Bearer {token}
+```
+
+The response is an array of `ApiSponsor` objects:
+
+```ts
+interface ApiSponsor {
+  company_name: string;
+  email_list: string[];
+  passcode: string;
+  tier: string;
+}
+```
+
+Names and tiers are extracted into parallel state arrays:
+
+```ts
+const sponsors = data.map((s: ApiSponsor) => s.company_name);
+const tiers    = data.map((s: ApiSponsor) => s.tier);
+setSponsors(sponsors);
+setTiers(tiers);
+```
+
+`refetchSponsors()` in `Admin.tsx` re-runs this same fetch and is called after any create, delete, or tier-change operation to keep state synchronized with the server.
+
+---
+
+## Adding a Sponsor
+
+Clicking **+ New Sponsor** opens `AddSponsorModal`. It is mounted via `React.createPortal` onto `document.body` and uses `useScrollLock(true)`.
+
+### Form Fields
+
+| Field | Required | Type | Notes |
+|---|---|---|---|
+| Sponsor Name | ✅ | `string` | Company name, e.g., `"Deloitte"` |
+| Tier | ✅ | `"platinum" \| "gold" \| "silver" \| "bronze"` | Dropdown, defaults to `"bronze"` |
+| Email List | ✅ | `string[]` | Comma-separated emails pasted into a `<textarea>`, split on `,` with trim |
+| Passcode | ✅ | `string` | Minimum 6 characters; used for sponsor portal authentication |
+
+### Submission
+
+```ts
+// POST /sponsors/add-sponsor
+const sponsorData = {
+  sponsor_name: sponsor.trim(),
+  tier: tier,
+  emailList: emailList,
+  passcode: passcode,
+};
+```
+
+<Warning>
+  The passcode minimum length check (`passcode.length < 6`) is enforced **after** regular form validation. If it fails, a toast is shown and the request is not sent, but the modal remains open. Inform sponsors of this requirement upfront.
+</Warning>
+
+The modal validates that all four fields are non-empty before sending. If the backend returns an error, even within a `200 OK` body (checked by `data?.error`), the error is surfaced as a toast. On success, `handleSponsorAdded` re-fetches the full sponsor list from the server via `refetchSponsors()` to ensure consistency, then closes the modal.
+
+### Unsaved Changes Guard
+
+Like all modals in this dashboard, `AddSponsorModal` computes `hasChanges()` by JSON-comparing current state to `initialStateRef`. Closing with unsaved changes prompts a `ConfirmationModal`:
+
+```
+"You have unsaved changes. Are you sure you want to close this form?"
+```
+
+---
+
+## Passcode System
+
+Each sponsor in the database has a `passcode` field. This passcode is used by sponsor users to authenticate into the **Sponsor Portal** — a separate section of the platform where sponsors can view their company profile and interact with the chapter. The passcode is set at creation time (minimum 6 characters) and is not directly editable from the Admin Dashboard UI after creation. It is returned in `GET /sponsors/` but should not be exposed in the member-facing UI.
+
+<Note>
+  Sponsor accounts are not Supabase auth users in the traditional sense — they authenticate via passcode rather than email/password. The `passcode` field stored on the sponsor record is what the sponsor portal checks at login.
+</Note>
+
+---
+
+## Deleting a Sponsor
+
+Each sponsor row in `SponsorList` has a `Trash2` icon button. Clicking it sets `emailToDelete` in local state, which renders a `DeleteConfirmation` inline component. On confirm, `onDelete` calls:
+
+```ts
+// In Admin.tsx → handleDeleteSponsor
+// POST /sponsors/delete-sponsor
+body: JSON.stringify({ sponsor_name: sponsorName })
+```
+
+The sponsor is then removed from local `sponsors[]` state:
+
+```ts
+setSponsors(sponsors.filter((e) => e !== sponsorName));
+```
+
+---
+
+## Changing a Sponsor's Tier
+
+The inline `<select>` in each `SponsorList` row fires `handleChangeTier(email, newTier, e)` on change. This calls `onTierChangeConfirm` (passed from `Admin.tsx`), which shows the global `ConfirmDialog`:
+
+```
+"Are you sure you want to change {sponsorName}'s tier to {newTier}?"
+```
+
+On confirm, `actuallyUpdateSponsorTier` is called:
+
+```ts
+// POST /sponsors/change-sponsor-tier
+body: JSON.stringify({ sponsor_name: email, tier: newTier })
+```
+
+After a successful response, `refetchSponsors()` refreshes the full list to reflect the new tier in the UI.
+
+<Tip>
+  The tier `<select>` uses `e.stopPropagation()` to prevent the row's click handler (which opens the profile edit modal) from firing when only the tier is being changed.
+</Tip>
+
+---
+
+## Updating a Sponsor's Profile
+
+Clicking the `MoreHorizontal` icon (or anywhere on the sponsor row) fetches the full sponsor record and opens the `ProfileEditModal` from `src/components/sponsor/ProfileEditModal.tsx`.
+
+### Fetching Sponsor Details
+
+```ts
+// POST /sponsors/get-one-sponsor-info
+body: JSON.stringify({ sponsor_name: sponsorName })
+```
+
+The response populates a `SponsorProfileData` object:
+
+```ts
+interface SponsorProfileData {
+  sponsorName: string;
+  sponsorDescription: string;  // maps from data.about || data.description
+  links: string[];             // data.links (filtered to strings only)
+  profileUrl: string;          // data.pfp_url || data.profileUrl
+}
+```
+
+### Saving Profile Updates
+
+The `ProfileEditModal` collects a free-text `description` (bio) and an array of `links`. On save, `handleSponsorUpdate` in `SponsorList` calls `onProfileUpdateConfirm` with:
+
+```ts
+interface SponsorUpdateData {
+  companyName: string;
+  description: string;
+  links: string[];
+}
+```
+
+Which in `Admin.tsx` → `actuallyUpdateSponsorProfile` posts:
+
+```ts
+// POST /sponsors/{companyName}/details
+body: JSON.stringify({
+  about: updatedData.description,
+  links: updatedData.links,
+})
+```
+
+The `showDiscardConfirmation` prop on `ProfileEditModal` routes the "discard changes?" prompt back through the global `showConfirmationDialog` helper so it uses the same `ConfirmDialog` component as the rest of the dashboard.
+
+---
+
+## SponsorList Component
+
+`SponsorList` receives the parallel `emails[]` and `tiers[]` arrays and zips them internally:
+
+```ts
+const filteredSponsors = emails
+  .map((email, index) => ({ email, tier: tiers[index] }))
+  .filter(({ email }) => email.toLowerCase().includes(searchQuery.toLowerCase()));
+```
+
+### Props
+
+```ts
+interface SponsorListProps {
+  emails: string[];
+  tiers: string[];
+  onDelete: (sponsorName: string) => void;
+  userType: "admin" | "sponsor";
+  onTierChangeConfirm: (email: string, newTier: string, successCallback: () => void) => void;
+  onProfileUpdateConfirm: (updatedData: SponsorUpdateData) => void;
+  showConfirmationDialog: (
+    title: string,
+    message: string,
+    onConfirm: () => void,
+    confirmText?: string,
+    cancelText?: string
+  ) => void;
+  onCreateNew?: () => void;
+}
+```
+
+<Note>
+  The `showConfirmationDialog` prop is passed directly from `Admin.tsx` to allow `SponsorList` to trigger the top-level `ConfirmDialog` without owning its own modal state. This keeps the confirmation UX consistent across all dashboard sections.
+</Note>
+
+---
+
+## Sponsor Type Reference
+
+```ts
+// src/types/index.ts
+export interface Sponsor {
+  id?: string;
+  type?: "sponsor";
+  name: string;
+  about: string;
+  links?: string[] | null;
+  photoUrl?: string | null;
+  resources?: { label: string; url: string }[] | null;
+  tier?: string;
+  emails?: string[];
+}
+```
+
+---
+
+## API Reference
+
+| Operation | Method | Endpoint | Body |
+|---|---|---|---|
+| List sponsors | GET | `/sponsors/` | — |
+| Add sponsor | POST | `/sponsors/add-sponsor` | `{ sponsor_name, tier, emailList, passcode }` |
+| Delete sponsor | POST | `/sponsors/delete-sponsor` | `{ sponsor_name }` |
+| Change tier | POST | `/sponsors/change-sponsor-tier` | `{ sponsor_name, tier }` |
+| Get sponsor profile | POST | `/sponsors/get-one-sponsor-info` | `{ sponsor_name }` |
+| Update sponsor profile | POST | `/sponsors/:name/details` | `{ about, links }` |

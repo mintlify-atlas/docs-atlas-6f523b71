@@ -1,0 +1,325 @@
+---
+title: "Admin Member Management — Active, Archived & Alumni"
+sidebarTitle: "Members"
+description: "Full reference for the three member panels in the Admin Dashboard: active general members, archived (soft-deleted) members, and read-only alumni, including rank and archive/restore flows."
+---
+
+Member management in the Admin Dashboard is divided across three panels rendered inside the two-column grid in `Admin.tsx`: **General Members** (active roster), **Archived Members** (soft-deleted), and **Alumni Members** (read-only). All three share the same `GET /users/summary` source of truth for active users, but each panel fetches and manages its own slice of data independently. The General Members panel is the most interactive — it supports search, rank filtering, inline profile editing, and soft-archiving. Archived Members supports restore. Alumni is display-only with a search filter. Together they implement a full member lifecycle: onboarding → active → archived → (optionally) permanently deleted.
+
+## Rank System
+
+Members carry one of three rank values stored in the database. The frontend capitalizes rank values from `GET /users/summary` before displaying them:
+
+```ts
+rank: item.rank
+  ? item.rank.charAt(0).toUpperCase() + item.rank.slice(1)
+  : "Not Specified",
+```
+
+| Raw API Value | Display Label | Meaning |
+|---|---|---|
+| `pledge` | `Pledge` | Prospective/probationary member |
+| `inducted` | `Inducted` | Full chapter member |
+| `alumni` | `Alumni` | Graduated member |
+
+The `MemberRank` type is exported from `src/types/index.ts`:
+
+```ts
+export type MemberRank = 'pledge' | 'inducted' | 'alumni';
+```
+
+## Role Values
+
+In addition to rank, each user has a `role` that determines system access:
+
+| Value | Description |
+|---|---|
+| `e-board` | Full admin access to the dashboard |
+| `general-member` | Standard chapter member |
+| `sponsor-admin` | Sponsor portal access only |
+
+Role can be updated from the member edit modal by an e-board user via `POST /users/update-role`.
+
+---
+
+## General Members Panel
+
+The General Members panel renders the `EmailList` component with `userType="member"`, `useArchiveForDelete={true}`, and `showRankFilter={true}`.
+
+### Data Loading
+
+`fetchMembers()` in `Admin.tsx` calls `GET /users/summary` and filters to `role === "general-member"`:
+
+```ts
+const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/users/summary`, {
+  method: "GET",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+});
+const data = await response.json();
+
+const members = data
+  .filter((item) => item.role === "general-member")
+  .map((item) => ({
+    email: item.email,
+    name: item.name,
+    rank: item.rank
+      ? item.rank.charAt(0).toUpperCase() + item.rank.slice(1)
+      : "Not Specified",
+  }));
+```
+
+The summary response shape per item is `{ email: string; name?: string; role: string; rank?: string }`.
+
+### Search and Filter
+
+`EmailList` provides a `SearchInput` that filters on `name || email` (case-insensitive substring). When `showRankFilter={true}`, a `<select>` dropdown appears with options **All Ranks**, **Inducted**, and **Pledge**. Rank filtering compares against the capitalized rank string stored in each member object.
+
+```tsx
+<EmailList
+  emails={members}
+  onDelete={handleArchiveMember}
+  userType="member"
+  onEdit={handleMemberEdit}
+  onSave={handleMemberUpdateSave}
+  memberDetails={memberDetails}
+  onCreateNew={() => setShowAddMemberModal(true)}
+  showRankFilter={true}
+  useArchiveForDelete={true}
+  onArchiveSuccess={refreshArchivedMembers || undefined}
+/>
+```
+
+### Adding Members
+
+Clicking **+ New Member** opens `AddUserModal` configured with `role="general-member"`. The modal accepts one or more email addresses — users type an address and press **space** or **comma** to stage it as a pending chip. On submit, each email is sent individually to `POST /users/add-user`:
+
+```ts
+fetch(`${import.meta.env.VITE_BACKEND_URL}/users/add-user`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+  body: JSON.stringify({ user_email: email, role: "general-member" }),
+});
+```
+
+Results are aggregated with `Promise.allSettled` — successful emails are passed to `onUserAdded`, failed ones generate an error toast. Addition is preceded by a `ConfirmDialog`:
+
+```
+"Are you sure you want to add {n} new member(s)?"
+```
+
+<Note>
+  `AddUserModal` validates each email against the regex `/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/` before staging it. Duplicate emails within the same batch are also rejected.
+</Note>
+
+### Editing a Member Profile
+
+<Steps>
+  <Step title="Click the edit icon (⋯) on any member row">
+    `handleEditClick` in `EmailList` calls the parent's `onEdit(email)` prop, which triggers `handleMemberEdit(email)` in `Admin.tsx`.
+  </Step>
+  <Step title="Admin.tsx fetches full MemberDetail">
+    If the email is not already in the `memberDetails` cache, `GET /member-info/:email` is called. The raw API response is normalized into a `MemberDetail` object:
+    ```ts
+    const freshData: MemberDetail = {
+      id: raw.id?.toString() || raw.user_id || raw.user_email,
+      email: raw.user_email || raw.email || "",
+      name: raw.name || "",
+      phone: raw.phone || "",
+      major: raw.major || "",
+      graduationDate: raw.graduating_year ? String(raw.graduating_year) : "",
+      status: raw.member_status || raw.status || "Not Specified",
+      about: raw.about || "",
+      internship: raw.internship || "Not Specified",
+      photoUrl: raw.profile_photo_url || raw.photoUrl || "",
+      hours: raw.total_hours !== undefined ? String(raw.total_hours) : "0",
+      developmentHours: raw.development_hours?.toString() ?? "0",
+      professionalHours: raw.professional_hours?.toString() ?? "0",
+      serviceHours: raw.service_hours?.toString() ?? "0",
+      socialHours: raw.social_hours?.toString() ?? "0",
+      links: Array.isArray(raw.links) ? raw.links : [],
+      rank: raw.rank || raw.role || "Not Provided",
+      role: raw.role || "general-member",
+      event_attendance: raw.event_attendance || [],
+    };
+    ```
+  </Step>
+  <Step title="AdminMemberEditModal opens">
+    `EmailList` renders `AdminMemberEditModal` with `profileData={memberDetails[emailToEdit]}`. While `profileData` is `null` (still loading), the modal shows a spinner overlay.
+  </Step>
+  <Step title="User edits fields and saves">
+    `AdminMemberEditModal` delegates its form UI to the shared `ProfileEditModal` component with `showRank={true}`. On save, it calls two endpoints sequentially:
+    - `POST /member-info/edit-member-info/` — updates name, phone, major, graduating_year, status, about, rank
+    - `POST /users/update-role` — only fired if `updatedData.role !== profileData.role`
+  </Step>
+  <Step title="Cache and list refresh">
+    `handleMemberUpdateSave` in `Admin.tsx` updates the `memberDetails` cache locally then re-calls `fetchMembers()` to refresh the list view with any rank/name changes.
+  </Step>
+</Steps>
+
+#### Editable MemberDetail Fields
+
+| Field | API Key | Notes |
+|---|---|---|
+| `name` | `name` | Full display name |
+| `phone` | `phone` | Phone number string |
+| `major` | `major` | Academic major |
+| `graduationDate` | `graduating_year` | Sent as string, stored as year |
+| `status` | `member_status` | e.g., "Looking for Internship" |
+| `about` | `about` | Bio / description |
+| `rank` | `member_rank` | `pledge`, `inducted`, or `alumni` |
+| `role` | `role` | Sent separately to `/users/update-role` |
+
+---
+
+## Archived Members Panel
+
+The Archived Members panel renders the `ArchivedMembersList` component, which manages its own fetch lifecycle via `memberArchiveService.ts`.
+
+### Archive Flow (Active → Archived)
+
+When a user clicks the delete icon in the General Members `EmailList` with `useArchiveForDelete={true}`, an `ArchiveConfirmDialog` appears:
+
+```
+"Archive [Member Name]? This will hide them from active lists but their data is preserved."
+```
+
+On confirm, `handleArchiveMember` in `Admin.tsx` calls the service:
+
+```ts
+// src/services/memberArchiveService.ts
+export const archiveMember = async (email: string, token: string): Promise<ArchiveResponse> => {
+  const response = await fetch(
+    `${import.meta.env.VITE_BACKEND_URL}/member-info/${email}/archive`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+  // ...
+};
+```
+
+The endpoint performs a soft delete, setting `deleted_at` to the current timestamp. The member is removed from the active `members[]` state immediately for responsiveness, then `onArchiveSuccess` triggers a refresh of the `ArchivedMembersList`.
+
+### Restore Flow (Archived → Active)
+
+`ArchivedMembersList` fetches from `GET /member-info/archived` on mount (and re-fetches whenever `session` changes). Each archived entry shows a `RotateCcw` (restore) icon. Clicking it opens a `RestoreConfirmDialog`. On confirm:
+
+```ts
+export const restoreMember = async (email: string, token: string): Promise<ArchiveResponse> => {
+  const response = await fetch(
+    `${import.meta.env.VITE_BACKEND_URL}/member-info/${email}/restore`,
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+  );
+  // ...
+};
+```
+
+After a successful restore:
+1. The member is removed from `archivedMembers[]` local state.
+2. `onMemberRestored()` prop fires, calling `fetchMembers()` in `Admin.tsx` to re-add the member to the active list.
+
+### ArchivedMember Type
+
+```ts
+// src/services/memberArchiveService.ts
+export interface ArchivedMember {
+  email: string;
+  name: string;
+  deleted_at: string;       // ISO timestamp of archival
+  role: string;
+  rank?: string;
+  major?: string;
+  graduating_year?: number;
+  photoUrl?: string;
+}
+```
+
+<Warning>
+  The Archived Members panel only surfaces the **restore** action. Permanent deletion of a user account must be performed via the `POST /users/delete-user` endpoint, which is only exposed in the Admin Users / General Members panels through `handleDelete`. There is no "permanently delete" button in the Archived panel UI — this is intentional.
+</Warning>
+
+### Refresh Coordination
+
+`Admin.tsx` uses a ref-stored callback pattern to allow `ArchivedMembersList` to expose its internal `fetchArchivedMembers` function to the parent:
+
+```tsx
+// In Admin.tsx
+const [refreshArchivedMembers, setRefreshArchivedMembers] = useState<(() => void) | null>(null);
+
+// Passed to ArchivedMembersList
+<ArchivedMembersList
+  onMemberRestored={fetchMembers}
+  onRefreshRequested={(refreshFn) => setRefreshArchivedMembers(() => refreshFn)}
+/>
+
+// Passed to EmailList so archive success can trigger refresh
+onArchiveSuccess={refreshArchivedMembers || undefined}
+```
+
+---
+
+## Alumni Members Panel
+
+`AlumniMembersList` is a read-only panel that fetches from a dedicated alumni summary endpoint:
+
+```ts
+GET /member-info/alumni/summary
+```
+
+The response is typed as `MemberDetail[]`. The component provides a `SearchInput` filtering on `${name} ${email}` but does not support editing, archiving, or any write operations from this view.
+
+<Tip>
+  Alumni membership is determined by the `rank` field being `"alumni"` at the database level, not by a separate table. To convert an inducted member to alumni, use the General Members edit flow and change their rank to `alumni`.
+</Tip>
+
+---
+
+## MemberDetail Type Reference
+
+```ts
+// src/types/index.ts
+export interface MemberDetail {
+  id: string;
+  email: string;
+  name: string;
+  phone: string;
+  major: string;
+  graduationDate: string;
+  status: string;
+  about: string;
+  internship: string;
+  photoUrl: string;
+  hours: string;
+  developmentHours?: string;
+  professionalHours?: string;
+  serviceHours?: string;
+  socialHours?: string;
+  links?: string[];
+  rank: string;             // 'pledge' | 'inducted' | 'alumni'
+  role: string;             // 'e-board' | 'general-member' | 'sponsor-admin'
+  event_attendance?: any[];
+  deleted_at?: string | null;
+}
+```
+
+## API Reference
+
+| Operation | Method | Endpoint | Body |
+|---|---|---|---|
+| List all users | GET | `/users/summary` | — |
+| Get full profile | GET | `/member-info/:email` | — |
+| Edit member info | POST | `/member-info/edit-member-info/` | `{ user_email, name, phone, major, graduating_year, member_status, about, member_rank }` |
+| Update role | POST | `/users/update-role` | `{ user_email, role }` |
+| Archive member | POST | `/member-info/:email/archive` | — |
+| Restore member | POST | `/member-info/:email/restore` | — |
+| List archived | GET | `/member-info/archived` | — |
+| List alumni | GET | `/member-info/alumni/summary` | — |
+| Add user | POST | `/users/add-user` | `{ user_email, role }` |
+| Delete user | POST | `/users/delete-user` | `{ user_email }` |

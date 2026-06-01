@@ -1,0 +1,137 @@
+{
+  "projectType": "saas",
+  "projectName": "Beta Alpha Psi — Beta Tau Chapter",
+  "projectDescription": "A full-stack web platform for the Beta Tau Chapter of Beta Alpha Psi at Arizona State University, providing member management, event tracking, announcements, sponsor relations, and a networking directory for students, alumni, and e-board members.",
+  "theme": "almond",
+  "primaryColor": "#ae2733",
+  "lightColor": "#666761",
+  "darkColor": "#d7cdbb",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "getting-started/local-setup",
+              "getting-started/environment-variables"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/routing",
+              "architecture/authentication"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "Public Pages",
+            "pages": [
+              "features/homepage",
+              "features/about",
+              "features/membership-process",
+              "features/sponsors",
+              "features/events-public",
+              "features/eboard-faculty",
+              "features/contact"
+            ]
+          },
+          {
+            "group": "Member Portal",
+            "pages": [
+              "features/member-dashboard",
+              "features/events-member",
+              "features/network-directory",
+              "features/resources",
+              "features/announcements"
+            ]
+          },
+          {
+            "group": "Admin Dashboard",
+            "pages": [
+              "features/admin-overview",
+              "features/admin-members",
+              "features/admin-events",
+              "features/admin-sponsors",
+              "features/admin-eboard"
+            ]
+          },
+          {
+            "group": "Sponsor Portal",
+            "pages": [
+              "features/sponsor-portal",
+              "features/sponsor-resources"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "API Integration",
+            "pages": [
+              "reference/backend-api",
+              "reference/data-types"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "reference/components-overview",
+              "reference/auth-context"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "reference/deployment",
+              "reference/cookie-migration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Google OAuth authentication via Supabase with role-based access control (e-board, general-member, sponsor, alumni)",
+    "Event management with RSVP, geolocation-based check-in, attendance tracking, dress code, and calendar subscription",
+    "Member directory with fuzzy search, sorting, filtering by graduation year, major, status, and rank",
+    "Admin dashboard for managing members, sponsors, announcements, resources, and e-board positions",
+    "Sponsor portal with tiered sponsorship display (platinum/gold/silver/bronze) and resource uploads",
+    "Alumni and e-board networking pages with display email substitution support",
+    "Resource library with categorized firm and chapter resources, searchable by fuzzy text",
+    "Announcement system with pin support, audience targeting (all/members/pledges), and rich-text editing via TinyMCE",
+    "Member archive/restore flow with soft-delete and admin-controlled restoration",
+    "Planned migration from localStorage to HttpOnly cookie-based authentication for improved XSS security"
+  ],
+  "publicApiSurface": [
+    "GET /events — fetch all events (role-scoped response: MemberEvent | AdminEvent)",
+    "GET /events/:eventId — fetch single event with participant details",
+    "POST /events/delete-event — delete an event (e-board only)",
+    "GET /announcements — list announcements sorted by pin status and date",
+    "POST /announcements/delete-announcement — remove announcement by ID",
+    "GET /sponsors/ — list all sponsors with tier, photo, and metadata",
+    "POST /sponsors/delete-sponsor — remove a sponsor by name",
+    "POST /sponsors/change-sponsor-tier — update a sponsor's tier",
+    "POST /sponsors/:name/details — update sponsor about and links",
+    "POST /users — authenticate user and return role (e-board | general-member | sponsor)",
+    "GET /users/summary — list all users with email, name, role, rank",
+    "POST /users/delete-user — remove a user by email",
+    "GET /member-info/:email — fetch full member profile",
+    "POST /member-info/:email/archive — soft-delete a member",
+    "POST /member-info/:email/restore — restore an archived member",
+    "GET /member-info/archived — list all archived members",
+    "GET /eboard — fetch e-board entries with role, display_email, name, major",
+    "GET /resources — list resource categories with signed URLs",
+    "GET /links?link_name=forms — fetch dynamic application form URL"
+  ]
+}

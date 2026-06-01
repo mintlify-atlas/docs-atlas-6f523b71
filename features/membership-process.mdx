@@ -1,0 +1,167 @@
+---
+title: "Membership Process — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "Membership"
+description: "Documents the three-step W.P. Carey Student → Candidate → Member flow, hour requirements, GPA rules, and the dynamic apply-form URL fetch."
+---
+
+The Membership page (`/membership`) renders the `ProcessFlow` component, which displays the three sequential steps required to progress from a prospective W.P. Carey student to a full Beta Alpha Psi member. The page is fully public — no `ProtectedRoute` wraps it — so any visitor can review the requirements before applying. A "Click Here To Apply!" button at the bottom opens the current application Google Form in a new tab; the form URL is fetched dynamically from the backend at mount time rather than being hardcoded, allowing e-board administrators to swap the form between recruiting windows without a code deploy.
+
+## Dynamic Apply-Form URL
+
+Both `ProcessFlow` (the full membership page) and `WhoWeAre` (the homepage section) independently fetch the same link record on mount:
+
+```ts
+// ProcessFlow.tsx — fetch apply form URL
+const fetchApplyFormUrl = async () => {
+  try {
+    const response = await fetch(
+      `${import.meta.env.VITE_BACKEND_URL}/links?link_name=forms`
+    );
+    if (response.ok) {
+      const data = await response.json();
+      setApplyFormUrl(data[0]?.link || "");
+    }
+  } catch (error) {
+    console.error("Error fetching apply form URL:", error);
+  }
+};
+```
+
+<Note>
+  If the request fails or returns an empty array, `applyFormUrl` stays as the empty string `""`. The apply button is still rendered but will open a blank tab. The homepage `WhoWeAre` component seeds the state with a closed-form fallback URL to handle the same failure case.
+</Note>
+
+## The Three Process Steps
+
+The `steps` array is defined inline in `ProcessFlow.tsx` and drives both the desktop (horizontal) and mobile (vertical) layouts.
+
+```ts
+const steps = [
+  {
+    title: "W.P. Carey Student",
+    requirements: [
+      "Declare or plan to declare major in Accounting, Finance, Business Data Analytics, or Computer Information Systems.",
+      "Complete BAP application during the recruiting window at the beginning of the Fall or Spring semester.",
+    ],
+  },
+  {
+    title: "Candidate",
+    requirements: [
+      "Must complete the 32 service and professional hours requirement (at least 12 professional hours, at least 12 service hours, at least 4 social hours and 4 hours of your choice) with 16 hours commonly done in one semester.",
+      "You can complete up to 5 non-BAP professional hours and 5 non-BAP community service hours, as long as you provide documentation.",
+      "Pay the Candidate fee.",
+      "Complete first upper-division major course (i.e., ACC 340, FIN 302, CIS 340)*.",
+      "Maintain at least a 3.0 major and overall GPA.",
+    ],
+  },
+  {
+    title: "Member",
+    requirements: [
+      "Membership is achieved once 32 hours are completed and the GPA requirement is met.",
+      "Continue to contribute 16 hours per semester (at least 6 professional, at least 6 community service, at least 2 social and 2 of your choice).",
+      "Pay the Member fee.",
+      "Maintain at least a 3.0 major and overall GPA.",
+      "All members are eligible to run for positions on the executive board, regardless of how long they have been members.",
+    ],
+  },
+];
+```
+
+<Steps>
+  <Step title="W.P. Carey Student">
+    The entry point. A student must declare (or plan to declare) a major in **Accounting**, **Finance**, **Business Data Analytics**, or **Computer Information Systems**, and submit the BAP application during the recruiting window at the start of a Fall or Spring semester.
+  </Step>
+  <Step title="Candidate">
+    The active earning phase. Candidates must accumulate **32 total hours** structured as follows:
+
+    | Hour Type | Minimum Required |
+    |---|---|
+    | Professional | 12 hrs |
+    | Community Service | 12 hrs |
+    | Social | 4 hrs |
+    | Choice (any category) | 4 hrs |
+    | **Total** | **32 hrs** |
+
+    Up to **5 non-BAP professional hours** and **5 non-BAP community service hours** count toward the totals with documentation. Candidates must also pay the Candidate fee, complete their first upper-division major course (ACC 340, FIN 302, or CIS 340), and maintain a **3.0 GPA** in both their major and overall coursework. Commonly, 16 of the 32 hours are completed in a single semester.
+  </Step>
+  <Step title="Member">
+    Full membership is conferred once the 32-hour requirement and GPA minimum are met. Members maintain active status by contributing **16 hours per semester**:
+
+    | Hour Type | Minimum Required |
+    |---|---|
+    | Professional | 6 hrs |
+    | Community Service | 6 hrs |
+    | Social | 2 hrs |
+    | Choice | 2 hrs |
+
+    Members continue to pay a semester fee and maintain a 3.0 GPA. **All members are eligible to run for e-board positions** regardless of tenure.
+  </Step>
+</Steps>
+
+## ProcessStep Component
+
+Each step is rendered by the `ProcessStep` component, which accepts `title` (string) and `requirements` (string array):
+
+```ts
+interface ProcessStepProps {
+  title: string;
+  requirements: string[];
+}
+
+export const ProcessStep = ({ title, requirements }: ProcessStepProps) => (
+  <div className="flex flex-col bg-white shadow-md rounded-lg p-6 h-full">
+    <h2 className="text-[#AF272F] text-3xl md:text-4xl font-bold text-center mb-6 pb-3 border-b border-gray-100">
+      {title}
+    </h2>
+    <div className="text-gray-700 text-base md:text-lg space-y-4">
+      {requirements.map((requirement, index) => (
+        <div key={index} className="flex items-start">
+          <span className="text-[#AF272F] font-bold mr-2">•</span>
+          <p>{requirement}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+```
+
+## ProcessArrow Component
+
+Between each `ProcessStep` card the `ProcessArrow` component renders an SVG chevron in `#AF272F`. On desktop (md and above) arrows render horizontally; on mobile the arrow wrapper is rotated 90° via `transform rotate-90` to point downward in the vertical stack.
+
+```ts
+export const ProcessArrow = () => (
+  <div className="flex items-center justify-center w-full">
+    <svg width="40" height="60" viewBox="0 0 40 60" fill="none">
+      <path
+        d="M5 5L30 30L5 55"
+        stroke="#AF272F"
+        strokeWidth="8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  </div>
+);
+```
+
+## Responsive Layout
+
+<Tabs>
+  <Tab title="Desktop (md+)">
+    Steps are laid out in a single horizontal row using `flex justify-center items-stretch gap-8`. Each `ProcessStep` occupies `flex-1 max-w-md`, and a `ProcessArrow` (w-10) sits between them. Cards stretch to equal height via `items-stretch`.
+  </Tab>
+  <Tab title="Mobile">
+    Steps stack vertically using `space-y-6`. A `ProcessArrow` sits between each step, wrapped in `transform rotate-90` so the chevron points downward. The apply button appears below all steps.
+  </Tab>
+</Tabs>
+
+## Upper-Division Course Footnote
+
+A footnote appears below the apply button clarifying the upper-division course requirement:
+
+> *Have completed at least one major course (accounting, finance, business analytics or digital technology or corresponding to major area) beyond the principles or introductory level (for transfer students, the most recent qualifying course must be at the initiating institution). Do not need for candidate status, but need to have completed to reach member status.*
+
+<Tip>
+  Transfer students must have taken the qualifying upper-division course at their initiating institution. The course is **not** required for Candidate status but **is** required to advance to full Member status.
+</Tip>

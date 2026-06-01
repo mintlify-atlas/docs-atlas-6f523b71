@@ -1,72 +1,117 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Beta Alpha Psi — Beta Tau Chapter",
+  "theme": "almond",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#ae2733",
+    "light": "#666761",
+    "dark": "#d7cdbb"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/994edfc5-d35c-4165-b4ad-bf741147bea0.jpg",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/asubap/website"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/asubap/website"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "getting-started/local-setup",
+              "getting-started/environment-variables"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/routing",
+              "architecture/authentication"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "Public Pages",
+            "pages": [
+              "features/homepage",
+              "features/about",
+              "features/membership-process",
+              "features/sponsors",
+              "features/events-public",
+              "features/eboard-faculty",
+              "features/contact"
+            ]
+          },
+          {
+            "group": "Member Portal",
+            "pages": [
+              "features/member-dashboard",
+              "features/events-member",
+              "features/network-directory",
+              "features/resources",
+              "features/announcements"
+            ]
+          },
+          {
+            "group": "Admin Dashboard",
+            "pages": [
+              "features/admin-overview",
+              "features/admin-members",
+              "features/admin-events",
+              "features/admin-sponsors",
+              "features/admin-eboard"
+            ]
+          },
+          {
+            "group": "Sponsor Portal",
+            "pages": [
+              "features/sponsor-portal",
+              "features/sponsor-resources"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "API Integration",
+            "pages": [
+              "reference/backend-api",
+              "reference/data-types"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "reference/components-overview",
+              "reference/auth-context"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "reference/deployment",
+              "reference/cookie-migration"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

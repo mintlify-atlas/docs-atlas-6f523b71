@@ -1,0 +1,257 @@
+---
+title: "Routing Architecture for the BAP Beta Tau Frontend"
+sidebarTitle: "Routing"
+description: "Complete documentation of all public and protected routes, the ProtectedRoute guard component, role-based path restrictions, and the nav link system."
+---
+
+All routing in the BAP Beta Tau frontend is declared in a single file — `src/App.tsx` — using React Router DOM v7's `<Routes>` and `<Route>` components inside a `<BrowserRouter>`. The route tree is split into two categories: public routes that anyone can visit without authentication, and protected routes that require a valid Supabase session before the browser renders them. Protected routes are wrapped in a `<ProtectedRoute />` layout component that reads auth state from `useAuth()` and redirects unauthenticated visitors to `/login`. Within protected routes, a secondary permission layer restricts certain paths to specific roles (`e-board`, `general-member`, `sponsor`).
+
+## Route Declarations in `App.tsx`
+
+The complete route tree as declared in the source:
+
+```tsx
+// src/App.tsx
+<Routes>
+  {/* ── Public Routes ─────────────────────────────── */}
+  <Route path="/"              element={<Homepage />} />
+  <Route path="/about"         element={<AboutPage />} />
+  <Route path="/sponsors"      element={<SponsorsPage />} />
+  <Route path="/events"        element={<EventsPage />} />
+  <Route path="/membership"    element={<ProcessFlow />} />
+  <Route path="/login"         element={<LogInPage />} />
+  <Route path="/contact-us"    element={<ContactUsPage />} />
+  <Route path="/eboard-faculty" element={<EboardFacultyPage />} />
+
+  {/* ── Protected Routes (require session + role) ─── */}
+  <Route element={<ProtectedRoute />}>
+    <Route path="/auth/Home"        element={<AuthHome />} />
+    <Route path="/admin"            element={<Admin />} />
+    <Route path="/sponsor"          element={<SponsorHome />} />
+    <Route path="/member"           element={<MemberView />} />
+    <Route path="/network"          element={<NetworkingPage />} />
+    <Route path="/alumni"           element={<AlumniPage />} />
+    <Route path="/eboard-network"   element={<EboardPage />} />
+    <Route path="/sponsors-network" element={<SponsorsNetworkPage />} />
+    <Route path="/events/:eventId"  element={<ViewEvent />} />
+    <Route path="/resources"        element={<ResourcesPage />} />
+  </Route>
+
+  {/* ── 404 Catch-all ─────────────────────────────── */}
+  <Route path="*" element={<NotFound />} />
+</Routes>
+```
+
+## Public Routes
+
+Public routes are accessible to any visitor regardless of authentication status. The `Navbar` component renders different links based on whether `isAuthenticated` is true, but the routes themselves impose no auth check.
+
+| Path | Page Component | Description |
+|---|---|---|
+| `/` | `HomePage` | Public homepage with hero, "Who We Are" section, and upcoming events preview. |
+| `/about` | `AboutPage` | Chapter mission, values, and history. |
+| `/sponsors` | `SponsorsPage` | Showcase of chapter sponsors organized by tier. |
+| `/events` | `EventsPage` | Public events calendar listing. Does not show RSVP or check-in actions. |
+| `/membership` | `ProcessFlow` | Step-by-step membership application process guide. |
+| `/login` | `LogInPage` | Google OAuth sign-in page. Renders the `GoogleLogin` component. |
+| `/contact-us` | `ContactUsPage` | Public contact form for reaching chapter officers. |
+| `/eboard-faculty` | `EboardFacultyPage` | Public directory of executive board members and faculty advisors. |
+
+## Protected Routes
+
+Protected routes sit inside the `<Route element={<ProtectedRoute />}>` layout route. React Router renders `ProtectedRoute` first; if it returns `<Outlet />`, the child route renders. If authentication or permission checks fail, `ProtectedRoute` returns a `<Navigate>` redirect instead.
+
+| Path | Page Component | Required Role | Description |
+|---|---|---|---|
+| `/auth/Home` | `AuthHome` | Session only (no role required) | Post-login landing page. Also shown if role fetch fails, to display the auth error. |
+| `/admin` | `Admin` | `e-board` | Full admin dashboard with member, event, announcement, sponsor, resource, and e-board management. |
+| `/sponsor` | `SponsorHome` | `sponsor` | Sponsor portal with company profile and resource upload tools. |
+| `/member` | `MemberView` | `general-member` | General member dashboard with profile, announcements, and event actions. |
+| `/network` | `NetworkingPage` | Any valid role | Searchable directory of active chapter members. |
+| `/alumni` | `AlumniPage` | Any valid role | Searchable directory of chapter alumni. |
+| `/eboard-network` | `EboardPage` | Any valid role | Directory view of current executive board members. |
+| `/sponsors-network` | `SponsorsNetworkPage` | Any valid role | Authenticated sponsors directory for member networking. |
+| `/events/:eventId` | `ViewEvent` | Any valid role | Full event detail page with RSVP, check-in, and attendee management (admin only). |
+| `/resources` | `ResourcesPage` | Any valid role | Shared resource library with file previews and category filtering. |
+
+<Note>
+  `/auth/Home` is intentionally exempt from the role check inside `ProtectedRoute`. This allows the `AuthHome` page to render even when the backend role fetch has failed, so the page can display the error message and offer a sign-out option before the interval or state cleanup occurs.
+</Note>
+
+## The `ProtectedRoute` Component
+
+`ProtectedRoute` is a layout route component — it renders no visual UI of its own, only a redirect or `<Outlet />` based on auth state.
+
+```tsx
+// src/components/protectedRoute/ProtectedRoute.tsx
+const ProtectedRoute = () => {
+  const { session, loading, role } = useAuth();
+  const location = useLocation();
+
+  const hasPermission = () => {
+    if (!role) return false;
+    const path = location.pathname;
+
+    // Handles both string roles and the SponsorRole object shape
+    const checkRole = (roleType: string) => {
+      if (typeof role === "string") {
+        return role.includes(roleType);
+      } else if (typeof role === "object" && role !== null) {
+        return role.type === roleType;
+      }
+      return false;
+    };
+
+    if (path.startsWith("/admin") && !checkRole("e-board"))      return false;
+    if (path === "/sponsor"       && !checkRole("sponsor"))       return false;
+    if (path.startsWith("/member") && !checkRole("general-member")) return false;
+
+    return true; // All other protected paths are accessible to any authenticated user
+  };
+
+  // 1. Show loading spinner while auth initializes
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <LoadingSpinner text="Loading..." size="lg" />
+      </div>
+    );
+  }
+
+  // 2. No session → redirect to /login (saves attempted path in localStorage)
+  if (!session) {
+    localStorage.setItem("redirectAfterLogin", location.pathname);
+    return <Navigate to="/login" />;
+  }
+
+  // 3. /auth/Home is exempt from the role check
+  if (location.pathname === "/auth/Home") {
+    return <Outlet />;
+  }
+
+  // 4. Wrong role for this path → redirect to /auth/Home
+  if (!hasPermission()) {
+    return <Navigate to="/auth/Home" />;
+  }
+
+  // 5. Authenticated + authorized → render the requested route
+  return <Outlet />;
+};
+```
+
+### Guard Decision Flow
+
+```
+User visits a protected path
+         │
+         ▼
+  loading === true?  ──YES──▶  Show <LoadingSpinner>
+         │ NO
+         ▼
+  session === null?  ──YES──▶  Save path to localStorage
+         │                     <Navigate to="/login" />
+         │ NO
+         ▼
+  path === "/auth/Home"? ─YES─▶  <Outlet /> (role-error page)
+         │ NO
+         ▼
+  hasPermission()?   ──NO──▶  <Navigate to="/auth/Home" />
+         │ YES
+         ▼
+     <Outlet />  (render requested child route)
+```
+
+### Post-Login Redirect
+
+When an unauthenticated user attempts to visit a protected path, `ProtectedRoute` saves the attempted path to `localStorage` before redirecting:
+
+```tsx
+localStorage.setItem("redirectAfterLogin", location.pathname);
+return <Navigate to="/login" />;
+```
+
+The `LogInPage` (or the `AuthProvider` after session establishment) should read this value to redirect the user back after a successful login.
+
+## Navigation Links
+
+Navigation links are defined in `src/components/nav/NavLink.ts` and are not hardcoded in the `Navbar` component. The `getNavLinks(isLoggedIn)` function returns the appropriate set based on authentication state.
+
+```typescript
+// src/components/nav/NavLink.ts
+
+export type NavItem = {
+  name: string;
+  href?: string;
+  onClick?: () => void;
+  children?: { name: string; href: string }[];  // Dropdown items
+};
+
+// Shown to unauthenticated visitors
+export const navLinks: NavItem[] = [
+  { name: "About Us",        href: "/about" },
+  { name: "Our Sponsors",    href: "/sponsors" },
+  { name: "Events",          href: "/events" },
+  { name: "E-Board & Faculty", href: "/eboard-faculty" },
+  { name: "Membership",      href: "/membership" },
+  { name: "Log In",          href: "/login" },
+];
+
+// Shown to authenticated users
+const navLinksLoggedIn: NavItem[] = [
+  {
+    name: "Network",
+    children: [              // Renders as a dropdown menu
+      { name: "Members", href: "/network" },
+      { name: "Alumni",  href: "/alumni" },
+      { name: "Eboard",  href: "/eboard-network" },
+    ],
+  },
+  { name: "Sponsors",   href: "/sponsors-network" },
+  { name: "Events",     href: "/events" },
+  { name: "Dashboard",  href: "/admin" },
+];
+
+export function getNavLinks(isLoggedIn: boolean): NavItem[] {
+  return isLoggedIn ? navLinksLoggedIn : navLinks;
+}
+```
+
+<Note>
+  The authenticated nav always links to `/admin` as the "Dashboard" link, regardless of the user's role. `ProtectedRoute` will redirect non-e-board users away from `/admin` to `/auth/Home` — the role-appropriate dashboard (`/member`, `/sponsor`) is reached from `AuthHome` rather than from the nav bar directly.
+</Note>
+
+## Adding a New Route
+
+<Steps>
+  <Step title="Create the page component">
+    Add a new directory under `src/pages/` (e.g., `src/pages/my-feature/`) and create the page component file (e.g., `MyFeaturePage.tsx`).
+  </Step>
+  <Step title="Import the component in App.tsx">
+    ```tsx
+    import MyFeaturePage from "./pages/my-feature/MyFeaturePage";
+    ```
+  </Step>
+  <Step title="Declare the route">
+    Add a `<Route>` element. For a public route, add it at the top level. For a protected route, nest it inside the existing `<Route element={<ProtectedRoute />}>` block.
+
+    ```tsx
+    // Protected route example
+    <Route element={<ProtectedRoute />}>
+      {/* existing routes... */}
+      <Route path="/my-feature" element={<MyFeaturePage />} />
+    </Route>
+    ```
+  </Step>
+  <Step title="Add role restrictions if needed">
+    If the route should be restricted to a specific role, add the check to `hasPermission()` in `ProtectedRoute.tsx`:
+
+    ```tsx
+    if (path.startsWith("/my-feature") && !checkRole("e-board")) {
+      return false;
+    }
+    ```
+  </Step>
+  <Step title="Add to navigation if applicable">
+    Update `navLinksLoggedIn` (or `navLinks` for public pages) in `src/components/nav/NavLink.ts`.
+  </Step>
+</Steps>

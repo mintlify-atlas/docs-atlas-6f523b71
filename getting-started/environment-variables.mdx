@@ -1,0 +1,149 @@
+---
+title: "Environment Variables for the BAP Beta Tau Frontend"
+sidebarTitle: "Env Variables"
+description: "Complete reference for every VITE_ environment variable the frontend consumes, including where to find each value and what breaks when one is missing."
+---
+
+The BAP Beta Tau frontend is a purely client-side Vite application, which means every configuration value that needs to vary between environments must be injected at build time through environment variables. Vite exposes these to the browser bundle via `import.meta.env` — but only variables whose names begin with the `VITE_` prefix are included in the bundle. Any variable without that prefix stays server-side and resolves to `undefined` in the browser. The project currently requires three variables: one for the backend API and two for Supabase (project URL and anonymous key). All three must be present for authentication and data fetching to function.
+
+## Environment File Location
+
+Create a file named `.env` in the `Frontend/` directory (the same directory as `package.json`). Vite automatically loads this file for all `npm run dev` and `npm run build` invocations. For environment-specific overrides, Vite supports `.env.local`, `.env.development`, and `.env.production` files — values in `.env.local` take precedence over `.env` and are never committed.
+
+```
+Frontend/
+├── .env              ← create this (git-ignored)
+├── .env.local        ← optional local overrides (git-ignored)
+├── package.json
+└── src/
+```
+
+## Required Variables
+
+### `VITE_BACKEND_URL`
+
+The base URL for the BAP backend REST API. Every authenticated request the frontend makes — role fetches, member lookups, event management — is sent to endpoints under this base URL.
+
+| Property | Value |
+|---|---|
+| **Required** | Yes |
+| **Used in** | `src/context/auth/authProvider.tsx`, all service files under `src/services/` and page-level `fetch()` calls |
+| **Format** | Full URL with protocol and no trailing slash |
+| **Example** | `https://api.bapbetatau.com` |
+
+The `authProvider` uses this variable directly when fetching the authenticated user's role:
+
+```typescript
+// src/context/auth/authProvider.tsx
+const response = await fetch(
+  `${import.meta.env.VITE_BACKEND_URL}/users`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ user_email: email }),
+  }
+);
+```
+
+**Where to find it:** Ask the current backend maintainer or check the Vercel project's environment variable settings. For local development against a locally-running backend, use `http://localhost:<port>`.
+
+<Warning>
+  Do not include a trailing slash in `VITE_BACKEND_URL`. All endpoint paths in the source are written as `${VITE_BACKEND_URL}/users`, `${VITE_BACKEND_URL}/events`, etc. A trailing slash will produce double-slash URLs (`https://api.example.com//users`) that most servers reject.
+</Warning>
+
+---
+
+### `VITE_SUPABASE_URL`
+
+The HTTPS URL of your Supabase project. This is used to initialize the Supabase client in `src/context/auth/supabaseClient.ts`.
+
+| Property | Value |
+|---|---|
+| **Required** | Yes |
+| **Used in** | `src/context/auth/supabaseClient.ts` |
+| **Format** | `https://<project-ref>.supabase.co` |
+| **Example** | `https://abcdefghijklmnop.supabase.co` |
+
+**Where to find it:** Supabase Dashboard → your project → **Settings → API → Project URL**.
+
+---
+
+### `VITE_SUPABASE_ANON_KEY`
+
+The Supabase anonymous (public) API key for your project. This key is safe to expose in the browser — it is a JWT that grants access only to rows your Row Level Security (RLS) policies allow. The BAP frontend uses Supabase solely for authentication (Google OAuth session management), not for direct database queries, so the anon key has a narrow blast radius.
+
+| Property | Value |
+|---|---|
+| **Required** | Yes |
+| **Used in** | `src/context/auth/supabaseClient.ts` |
+| **Format** | Long JWT string beginning with `eyJ...` |
+| **Example** | `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` |
+
+**Where to find it:** Supabase Dashboard → your project → **Settings → API → Project API Keys → `anon` / `public`**.
+
+<Note>
+  Never place the Supabase **service role** key in any `VITE_` variable. The service role key bypasses all RLS policies and would be visible in the compiled JavaScript bundle, which is publicly accessible. The service role key belongs only in server-side environments (e.g., backend API).
+</Note>
+
+---
+
+## Complete `.env` Example
+
+```bash
+# Frontend/.env
+# ─────────────────────────────────────────────
+# Backend API
+# ─────────────────────────────────────────────
+VITE_BACKEND_URL=https://api.bapbetatau.com
+
+# ─────────────────────────────────────────────
+# Supabase
+# ─────────────────────────────────────────────
+VITE_SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.your-anon-key-here
+```
+
+## How Vite Exposes Variables
+
+Vite replaces all `import.meta.env.VITE_*` references at build time using a static string substitution. This means the values are baked into the JavaScript bundle — they are not fetched at runtime. The `vite-env.d.ts` file in `src/` provides TypeScript type declarations for `import.meta.env`:
+
+```typescript
+// src/vite-env.d.ts  (auto-generated by Vite)
+/// <reference types="vite/client" />
+```
+
+To add type safety for your custom variables, you can augment the `ImportMetaEnv` interface:
+
+```typescript
+// src/vite-env.d.ts
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_BACKEND_URL: string;
+  readonly VITE_SUPABASE_URL: string;
+  readonly VITE_SUPABASE_ANON_KEY: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+```
+
+## Variables in Vercel Deployments
+
+For the Vercel-hosted production and preview deployments, environment variables are configured in the Vercel project dashboard, not through `.env` files. Navigate to **Vercel Dashboard → BAP Frontend project → Settings → Environment Variables** and add all three variables for the **Production**, **Preview**, and **Development** environments as appropriate.
+
+<Tip>
+  Vercel's preview deployments (created for each pull request) can point to a staging backend by setting `VITE_BACKEND_URL` to a different value in the **Preview** environment scope. This lets you test against real data without affecting production.
+</Tip>
+
+## What Breaks Without Each Variable
+
+| Missing Variable | Symptom |
+|---|---|
+| `VITE_BACKEND_URL` | `authProvider` throws a network error immediately after Google OAuth completes. The user sees "Network error. Please try again." and cannot log in. All API calls across the app fail silently or throw `TypeError: Failed to fetch`. |
+| `VITE_SUPABASE_URL` | The Supabase client fails to initialize. `supabase.auth.getSession()` throws. The entire app crashes before the router renders. |
+| `VITE_SUPABASE_ANON_KEY` | Same as above — Supabase client cannot authenticate its requests to the Supabase Auth API. Google OAuth redirect will not complete. |

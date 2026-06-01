@@ -1,0 +1,118 @@
+---
+title: "Contact Us Page — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "Contact Us"
+description: "Documents the Contact Us page's static contact directory, clipboard-copy email interaction, and LinkedIn and Instagram social media links."
+---
+
+The Contact Us page (`/contact-us`) provides visitors with a direct directory of e-board role emails and links to the chapter's social media accounts. It is a fully public, statically authored page — there are no API calls, no forms to submit, and no authentication requirement. All contact information is hardcoded in the component as an inline `contactDetails` array, and social media links are stored in a `staticSocialLinks` array, making the page trivially easy to reason about and update.
+
+## Contact Directory
+
+Nine e-board roles are listed with their associated Gmail addresses. Each row renders as a `flex` item: the role label (bold, `min-w-[250px]`) on the left and a clickable email button on the right. Clicking the email button copies it to the clipboard and shows a `"Email copied to clipboard!"` success toast via the `ToastContext`.
+
+```ts
+const contactDetails = [
+  { role: "President",                    email: "president.asubap@gmail.com" },
+  { role: "Vice President",               email: "vp.asubap@gmail.com" },
+  { role: "Treasurer",                    email: "treasurer.asubap@gmail.com" },
+  { role: "Internal Communications",      email: "cmc.asubap@gmail.com" },
+  { role: "Director of Recruiting",       email: "info.asubap@gmail.com" },
+  { role: "Director of External Reporting", email: "natl.ro.asubap@gmail.com" },
+  { role: "Director of the Pledge Class", email: "pledgeclass.asubap@gmail.com" },
+  { role: "Director of Social Events",    email: "socials.asubap@gmail.com" },
+  { role: "Director of Community Service", email: "dcs.asubap@gmail.com" },
+];
+```
+
+### Copy-to-Clipboard Interaction
+
+```tsx
+<button
+  type="button"
+  title="Copy email to clipboard"
+  onClick={() => {
+    navigator.clipboard.writeText(contact.email);
+    showToast("Email copied to clipboard!", "success");
+  }}
+>
+  {contact.email}
+</button>
+```
+
+<Note>
+  The `mailto:` protocol is intentionally not used. Clicking an email directly copies it to the clipboard rather than opening a mail client, which gives users more flexibility in how they send their message.
+</Note>
+
+## Social Media Links
+
+Two social accounts are linked from a right-side panel. Both open in a new tab (`target="_blank" rel="noopener noreferrer"`):
+
+<CardGroup cols={2}>
+  <Card title="Instagram" icon="camera">
+    **Handle:** `@bapbetatauchapter`
+
+    **URL:** `https://www.instagram.com/bapbetatauchapter/`
+
+    Rendered as a square maroon tile (`bg-[#AF272F]`) with the Instagram SVG icon and a "Instagram" label.
+  </Card>
+  <Card title="LinkedIn" icon="linkedin">
+    **Company page:** `bap-betatauchapter`
+
+    **URL:** `https://www.linkedin.com/company/bap-betatauchapter/`
+
+    Rendered as a square LinkedIn-blue tile (`bg-[#0077B5]`) with the LinkedIn SVG icon and a "LinkedIn" label.
+  </Card>
+</CardGroup>
+
+```ts
+const staticSocialLinks = [
+  { name: "instagram", href: "https://www.instagram.com/bapbetatauchapter/" },
+  { name: "linkedin",  href: "https://www.linkedin.com/company/bap-betatauchapter/" },
+];
+```
+
+<Note>
+  Note that the Instagram handle linked from the Contact Us page (`@bapbetatauchapter`) is distinct from the one embedded on the Homepage (`@asubap`). `@asubap` is the chapter's general account embedded on the homepage; `@bapbetatauchapter` is the handle listed on the Contact Us page.
+</Note>
+
+## Page Layout
+
+The main content card uses a three-column CSS grid (`md:grid-cols-3`):
+
+| Column span | Content |
+|---|---|
+| `md:col-span-2` | Contact directory — role/email rows separated by `border-b border-gray-200` |
+| `md:col-span-1` | Social media tiles — stacked vertically, separated from the directory by `md:border-l md:border-gray-200` |
+
+```
+ContactUsPage
+├── Navbar (static navLinks — always public, not role-adaptive on this page)
+├── main (pt-32)
+│   └── max-w-6xl container
+│       ├── <h1> Contact Us
+│       └── bg-white shadow-xl rounded-lg card
+│           ├── md:col-span-2 — contact directory
+│           │   └── {contactDetails.map} — role + clipboard-copy email button
+│           └── md:col-span-1 — social media
+│               ├── Instagram tile
+│               └── LinkedIn tile
+└── Footer (backgroundColor="#AF272F")
+```
+
+<Tip>
+  Unlike other pages, `ContactUsPage` imports the static `navLinks` array directly (`import { navLinks } from "../../components/nav/NavLink"`) rather than calling `getNavLinks(isAuthenticated)`. This means the navigation displayed on the Contact page is always the unauthenticated public nav, even if the user is logged in. This is a known divergence from the other pages.
+</Tip>
+
+## E-Board Role Email Reference
+
+| Role | Email |
+|---|---|
+| President | president.asubap@gmail.com |
+| Vice President | vp.asubap@gmail.com |
+| Treasurer | treasurer.asubap@gmail.com |
+| Internal Communications | cmc.asubap@gmail.com |
+| Director of Recruiting | info.asubap@gmail.com |
+| Director of External Reporting | natl.ro.asubap@gmail.com |
+| Director of the Pledge Class | pledgeclass.asubap@gmail.com |
+| Director of Social Events | socials.asubap@gmail.com |
+| Director of Community Service | dcs.asubap@gmail.com |

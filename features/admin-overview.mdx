@@ -1,0 +1,127 @@
+---
+title: "Admin Dashboard Overview — Beta Alpha Psi Beta Tau"
+sidebarTitle: "Admin Overview"
+description: "A developer-focused map of the Admin Dashboard at /admin, covering all eight sections, access control, layout, and navigation between features."
+---
+
+The Admin Dashboard is the central control plane for e-board members of the Beta Alpha Psi Beta Tau Chapter. It lives at the `/admin` route and is exclusively accessible to authenticated users whose `role` field equals `"e-board"` — any other role is implicitly excluded by the route guard. On mount, the page fires four parallel fetches: `GET /users/summary` (twice, split into admin and member lists), `GET /sponsors/`, and `GET /announcements`. All state is held inside the `Admin` component; child sections receive sliced props and callback functions rather than managing their own top-level data. The page renders a full-width `Navbar` (with role-aware nav links), then a two-column `md:grid-cols-2` grid containing the eight dashboard sections described below, and ends with a `Footer`. All destructive and mutating actions are wrapped in either a `ConfirmDialog` (reusable, centralized) or a component-local `ConfirmationModal`, keeping confirmation logic consistent across the entire surface.
+
+## Layout
+
+The dashboard uses a responsive CSS grid defined in `Admin.tsx`:
+
+```tsx
+<div className="grid grid-cols-1 md:grid-cols-2 gap-12 w-full">
+```
+
+Sections are assigned `order-N` classes that control mobile vs. desktop stacking. The **Resource Management** and **Eboard Management** sections span the full two-column width (`col-span-1 md:col-span-2`) because they contain complex, accordion-style UIs that would be too cramped in a single column.
+
+## Dashboard Sections
+
+<CardGroup cols={2}>
+  <Card title="Announcements" icon="megaphone" href="/features/admin-overview#announcements">
+    Create, view, edit, delete, and pin rich-text announcements. Sorted pinned-first then newest-first. Uses TinyMCE for authoring.
+  </Card>
+  <Card title="Admin Users" icon="shield" href="/features/admin-overview#admin-users">
+    List of current e-board email addresses. Add new admins by email; remove them with a single click backed by `/users/delete-user`.
+  </Card>
+  <Card title="Sponsors" icon="building" href="/features/admin-sponsors">
+    Full CRUD for sponsor companies. Tier management (platinum → bronze), profile bio and links, passcode. See the dedicated Sponsors page.
+  </Card>
+  <Card title="General Members" icon="users" href="/features/admin-members">
+    Active `general-member` roster with search, rank filter, inline archive, and full profile edit. See the Members page.
+  </Card>
+  <Card title="Archived Members" icon="archive" href="/features/admin-members#archived-members">
+    Soft-deleted members. Restore with a single click; they re-appear in the active list immediately.
+  </Card>
+  <Card title="Alumni Members" icon="graduation-cap" href="/features/admin-members#alumni-members">
+    Read-only list pulled from `GET /member-info/alumni/summary`. Search only — no editing from this panel.
+  </Card>
+  <Card title="Resource Management" icon="folder" href="/features/admin-overview#resource-management">
+    Two-level hierarchy: categories (firm or chapter) containing file resources. Uploads go to Vercel Blob for files &gt;4.5 MB.
+  </Card>
+  <Card title="Eboard Management" icon="star" href="/features/admin-eboard">
+    Create and edit eboard role entries with display rank ordering, role email, and member email linkage. See the Eboard page.
+  </Card>
+</CardGroup>
+
+## Access Control
+
+<Warning>
+  The `/admin` route does **not** redirect unauthenticated users automatically within the component itself — the route guard is expected to be applied at the router level. Inside `Admin.tsx`, the `useAuth()` hook exposes `role` and `session`; all fetch calls use `session.access_token` as the Bearer token. Any request from a non-e-board account will be rejected at the API layer.
+</Warning>
+
+The role check happens at the Supabase JWT level on the backend. The frontend reads `role` from `useAuth()`:
+
+```tsx
+const { role, session, isAuthenticated } = useAuth();
+```
+
+## Global Confirm Dialog
+
+All mutating actions in `Admin.tsx` funnel through a single `ConfirmDialog` managed by the `confirmDialogInfo` state object:
+
+```tsx
+interface ConfirmDialogInfo {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  confirmText?: string;
+  cancelText?: string;
+}
+```
+
+The helper `showConfirmationDialog(title, message, onConfirmAction, confirmText?, cancelText?)` sets this state and is passed down to child components (e.g., `SponsorList`) that need to trigger confirmations but don't own the dialog themselves.
+
+## Data Flow Summary
+
+```
+Admin.tsx (state owner)
+├── fetchAdmins()       → GET /users/summary  → filter role === 'e-board'
+├── fetchMembers()      → GET /users/summary  → filter role === 'general-member'
+├── fetchSponsors()     → GET /sponsors/
+├── fetchAnnouncements()→ GET /announcements
+│
+├── EmailList (admin)   ← adminEmails[]
+├── EmailList (members) ← members[{email,name,rank}]  + memberDetails cache
+├── SponsorList         ← sponsors[] + tiers[]
+├── ArchivedMembersList ← self-fetches via memberArchiveService
+├── AlumniMembersList   ← self-fetches GET /member-info/alumni/summary
+├── AnnouncementListShort ← announcements[]
+├── ResourceManagement  ← self-fetches GET /resources
+└── EboardManagement    ← self-fetches GET /eboard
+```
+
+## Announcements
+
+Announcements are fetched from `GET /announcements` and sorted with pinned items first, then by `created_at` descending. The `AnnouncementListShort` component renders the list inline with Edit / View / Delete icon buttons per row.
+
+| Action | Endpoint | Method |
+|--------|----------|--------|
+| Create | `/announcements/add-announcement` | POST |
+| Edit   | `/announcements/edit-announcement` | POST |
+| Delete | `/announcements/delete-announcement` | POST |
+
+`CreateAnnouncementModal` uses TinyMCE (keyed by `VITE_TINY_MCE_KEY`) for rich-text description authoring. The `EditAnnouncementModal` uses a plain `<textarea>` and persists draft edits to `localStorage` under the key `modal-announcement-edit-{id}`.
+
+## Admin Users
+
+The Admin Users panel re-uses the `EmailList` component with `userType="admin"` and `clickable={false}`. The add flow launches `AddUserModal` with `role="e-board"`. Deletion calls `POST /users/delete-user` with `{ user_email }` and immediately filters the email out of local state.
+
+<Note>
+  The same `handleDelete` function removes emails from all three lists (admins, sponsors, members) in one call. Ensure the email only appears in the intended list to avoid cross-contamination.
+</Note>
+
+## Resource Management
+
+Resource Management is a self-contained `ResourceManagement` component that spans the full grid width. It organizes content into two levels:
+
+- **Categories** — each has a `name`, `description`, and `resourceType` (`"firm"` | `"chapter"`)
+- **Resources** — belong to a category; have `name`, `description`, `file_key`, `mime_type`, and a `signed_url` for preview/download
+
+Files larger than 4.5 MB are routed through Vercel Blob via `@vercel/blob/client`'s `upload()` function with the server-side handler at `/blob-upload/resources/:categoryId`. Smaller files are posted as `multipart/form-data` directly to `/resources/:categoryId/resources`.
+
+<Tip>
+  The `ResourcePreviewModal` uses `signed_url` to render a preview in-browser. If `signed_url` is `null`, the Eye button is disabled — this happens when a resource record exists in the database but its blob has been deleted externally.
+</Tip>

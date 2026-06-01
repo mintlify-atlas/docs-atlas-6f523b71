@@ -1,0 +1,259 @@
+---
+title: "Admin Eboard Management — Roles, Emails & Display Order"
+sidebarTitle: "Eboard"
+description: "Developer reference for creating, editing, and deleting eboard role entries: rank ordering, role_email vs member email, the EboardModal form, and the /eboard API endpoints."
+---
+
+The Eboard Management section is a self-contained `EboardManagement` component rendered at the bottom of the Admin Dashboard, spanning the full two-column grid width. It displays all current e-board role entries — each representing a chapter position such as "President" or "VP of Finance" — with full CRUD support. Unlike the General Members panel, which manages *user accounts*, the Eboard section manages *display entries* that appear on the public-facing Eboard page. Each entry links a chapter role (with its own role-specific email address) to a member account (via the member's personal email). Entries are ordered by a numeric `rank` field that controls display sequence on the public page.
+
+## Data Model
+
+The `EboardFacultyEntry` type is exported from `src/types/index.ts`:
+
+```ts
+// src/types/index.ts
+export type EboardFacultyEntry = {
+  role: string;              // e.g., "President", "VP of Finance"
+  role_email: string;        // Role-specific email, e.g., "president@bap.asu.edu"
+  email: string;             // Member's personal email (links to their account)
+  display_email?: string;    // Optional override email shown publicly
+  profile_photo_url?: string;
+  name: string | null;
+  major: string | null;
+  rank?: number;             // Display order (lower = shown first)
+};
+```
+
+The frontend model used within `EboardManagement` adds an `id` field (from the API or generated via `crypto.randomUUID()` as fallback) and remaps API fields:
+
+```ts
+// Internal to EboardManagement.tsx
+type EboardFacultyEntry = {
+  id: string;
+  name: string;
+  rank: number;
+  role: string;
+  email: string;       // Mapped from API field: role_email
+  memberEmail: string; // Mapped from API field: email (member's account email)
+  major: string;
+  location: string;
+};
+```
+
+<Warning>
+  The internal `email` field in `EboardManagement` maps to the API's `role_email` (the role-specific address, e.g., `president@bap.asu.edu`), while `memberEmail` maps to the API's `email` (the member's personal Supabase account email). This inversion from the canonical type is intentional — the component uses `role_email` as the primary identifier for edit and delete operations.
+</Warning>
+
+---
+
+## Fetching Eboard Entries
+
+`EboardManagement` fetches on mount via `fetchResources()` (confusingly named — it fetches eboard data, not file resources):
+
+```ts
+// GET /eboard
+const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/eboard`, {
+  headers: { Authorization: `Bearer ${session.access_token}` },
+});
+
+const data = await response.json();
+const entriesWithIds = data.map((entry: any) => ({
+  id: entry.id || crypto.randomUUID(),
+  role: entry.role,
+  rank: entry.rank || 1,
+  email: entry.role_email,      // role-specific email → internal "email"
+  memberEmail: entry.email,     // member account email → internal "memberEmail"
+  name: entry.name,
+  major: entry.major,
+  location: entry.location,
+}));
+```
+
+---
+
+## Rank Ordering
+
+The `rank` field is a positive integer that controls the display sequence on the public Eboard page. A lower rank number means the entry appears earlier (e.g., President at rank 1, VP at rank 2, etc.). There is no uniqueness constraint enforced client-side — two entries can share the same rank, in which case their relative order is determined by the server.
+
+The `EboardModal` enforces a positive integer for rank:
+
+```tsx
+<input
+  type="number"
+  min={1}
+  step={1}
+  pattern="[1-9][0-9]*"
+  value={eboardData.rank}
+  onChange={e => {
+    let val = e.target.value.replace(/^0+/, '');
+    if (val === '') {
+      onEboardDataChange("rank", '');
+    } else if (!isNaN(Number(val)) && Number(val) > 0) {
+      onEboardDataChange("rank", Number(val));
+    }
+  }}
+/>
+```
+
+Leading zeros are stripped. Empty input is allowed transiently (the field accepts `''` as a type) but the backend will reject a missing rank.
+
+---
+
+## The EboardModal Form
+
+`EboardModal` is used for both adding and editing entries. It is rendered inside `EboardManagement` (not via `createPortal`) and wraps the shared `Modal` component.
+
+### Fields
+
+| Field | Label | Required | Type | Notes |
+|---|---|---|---|---|
+| `rank` | Rank | ✅ | `number` | Positive integer, display order |
+| `role` | Role Name | ✅ | `string` | e.g., `"President"`, `"VP of Finance"` |
+| `email` | Role Email | ✅ | `string` | Role-specific email; used as primary key for edit/delete |
+| `memberEmail` | Member Email | ✅ | `string` | Linked to a general-member account; searchable typeahead |
+
+### Member Email Typeahead
+
+The `memberEmail` field is a searchable typeahead backed by `GET /users` (full user list, filtered to `role === "general-member"`). As the user types, a dropdown portal renders matching members by name or email:
+
+```ts
+// EboardModal fetches members via EboardManagement.fetchMembers()
+const fetchedMembers = data
+  .filter((item: any) => item.role === "general-member")
+  .map((item: any) => ({ email: item.email, name: item.name }));
+```
+
+The dropdown is rendered via `createPortal` onto `document.body` and is positioned below the input using `getBoundingClientRect()`. Pressing **Enter** selects the first filtered result. Clicking outside dismisses the dropdown.
+
+<Note>
+  The member list is sorted alphabetically by name in `EboardManagement.fetchMembers()` before being passed to `EboardModal`. The typeahead uses a simple `toLowerCase().includes()` filter, not fuzzy search (unlike the eboard entry list, which uses Fuse.js).
+</Note>
+
+---
+
+## Adding an Eboard Entry
+
+<Steps>
+  <Step title="Click '+ New Eboard Member'">
+    `handleOpenAddEntryModal` resets `eboardFormData` to blank values and sets `selectedEntry` to `null`, indicating create mode. `showEboardModal` becomes `true`.
+  </Step>
+  <Step title="Fill out the EboardModal form">
+    All four fields (rank, role, role email, member email) are required. The member email field uses the typeahead to search existing general-member accounts.
+  </Step>
+  <Step title="Submit — handleAddEntrySubmit">
+    ```ts
+    // POST /eboard/add-role
+    body: JSON.stringify({
+      role: eboardFormData.role,
+      role_email: eboardFormData.email,      // internal "email" = role_email
+      email: eboardFormData.memberEmail,     // internal "memberEmail" = member email
+      rank: eboardFormData.rank,
+    })
+    ```
+    On success, `fetchResources()` re-fetches the full eboard list.
+  </Step>
+</Steps>
+
+---
+
+## Editing an Eboard Entry
+
+<Steps>
+  <Step title="Click the ⋯ icon on an entry">
+    `handleOpenEditEntryModal(entry)` populates `eboardFormData` with the existing entry's values and sets `selectedEntry` to the entry object.
+  </Step>
+  <Step title="Modify fields in EboardModal">
+    The modal title changes to "Edit Eboard Member" and the confirm button reads "Update".
+  </Step>
+  <Step title="Submit — handleEditEntrySubmit">
+    ```ts
+    // POST /eboard/edit-role
+    body: JSON.stringify({
+      role_email: selectedEntry.email,       // Primary key: original role_email
+      role: eboardFormData.role,
+      email: eboardFormData.memberEmail,
+      rank: eboardFormData.rank,
+    })
+    ```
+    The `role_email` of the *original* `selectedEntry` is used as the primary key — not the potentially-edited value in `eboardFormData.email`. This means the role email itself cannot be changed via edit; a delete + re-add is required to change a role email.
+  </Step>
+</Steps>
+
+---
+
+## Deleting an Eboard Entry
+
+Clicking the `Trash2` icon on an entry sets `memberToDelete` to the entry's `email` (role_email) and opens a `ConfirmationModal`:
+
+```
+"Are you sure you want to delete this role? This action cannot be undone."
+```
+
+On confirm, `confirmDeleteEntry` posts:
+
+```ts
+// POST /eboard/delete-role
+body: JSON.stringify({ role_email: memberToDelete })
+```
+
+After success, `fetchResources()` refreshes the list.
+
+---
+
+## Search
+
+`EboardManagement` uses **Fuse.js** for fuzzy search over the `name` field (weight 0.7) with a threshold of `0.4`:
+
+```ts
+const fuseOptions = {
+  includeScore: true,
+  threshold: 0.4,
+  keys: [{ name: "name", weight: 0.7 }],
+};
+```
+
+The `SearchInput` updates `searchQuery` state, and `filteredEntries` is derived via `useMemo` from the Fuse instance. When `searchQuery` is empty, all entries are returned unfiltered.
+
+---
+
+## Unsaved Changes Guard
+
+`EboardManagement` tracks changes by comparing `eboardFormData` against `initialEntryStateRef.current`. If `hasEboardChanges()` returns true when the user attempts to close the modal, `showConfirmEboardClose` is set to `true`, rendering a `ConfirmationModal`:
+
+```
+"You have unsaved changes. Are you sure you want to close this form?"
+```
+
+Confirming discards the changes and fires a toast: `"Changes discarded."`.
+
+---
+
+## Entry Display
+
+Each entry in the list shows:
+
+```
+{entry.name}              [⋯ edit] [🗑 delete]
+Rank: {entry.rank}
+Role: {entry.role}
+Role Email: {entry.email}
+Member Email: {entry.memberEmail}
+Major: {entry.major}
+Location: {entry.location}  ← only shown if non-empty
+```
+
+---
+
+## API Reference
+
+| Operation | Method | Endpoint | Body |
+|---|---|---|---|
+| List all entries | GET | `/eboard` | — |
+| Add entry | POST | `/eboard/add-role` | `{ role, role_email, email, rank }` |
+| Edit entry | POST | `/eboard/edit-role` | `{ role_email, role, email, rank }` |
+| Delete entry | POST | `/eboard/delete-role` | `{ role_email }` |
+| List members (typeahead) | GET | `/users` | — (filtered client-side to `general-member`) |
+
+<Tip>
+  The `display_email` field in the canonical `EboardFacultyEntry` type exists for public profile display overrides but is not currently exposed in the `EboardModal` form. To set a `display_email`, it must be updated directly in the database or via a future admin UI addition.
+</Tip>

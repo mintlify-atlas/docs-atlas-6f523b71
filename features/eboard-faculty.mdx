@@ -1,0 +1,143 @@
+---
+title: "E-Board & Faculty Page — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "E-Board & Faculty"
+description: "Describes the E-Board & Faculty page, its localStorage caching strategy, the EboardFacultyEntry type, and the sorted card grid layout."
+---
+
+The E-Board & Faculty page (`/eboard-faculty`) presents every executive board role and faculty advisor associated with the Beta Tau Chapter in a responsive card grid. The page is fully public — no authentication is required to view it — and is accessible from the primary navigation bar. To minimize redundant API calls while keeping data reasonably fresh, the component implements a short-lived `localStorage` cache: entries fetched from `GET /eboard` are stored in `localStorage` under the key `"eboard_faculty_cache"` alongside a timestamp, and the cached payload is reused for up to **6 seconds** (`CACHE_DURATION = 6000 ms`) before the API is re-queried.
+
+## Data Fetching & Caching
+
+```ts
+const CACHE_KEY = "eboard_faculty_cache";
+const CACHE_DURATION = 6000; // milliseconds
+
+type CacheData = {
+  data:      EboardFacultyEntry[];
+  timestamp: number;
+};
+```
+
+On mount the component:
+
+<Steps>
+  <Step title="Read localStorage">
+    Retrieves the JSON string stored at `"eboard_faculty_cache"`. If the entry exists and its `timestamp` is less than 6 seconds old, the cached `data` array is applied directly to state and the API call is skipped.
+  </Step>
+  <Step title="Fetch from API (if cache is stale or absent)">
+    ```ts
+    const response = await fetch(
+      `${import.meta.env.VITE_BACKEND_URL}/eboard`,
+      { method: "GET", headers: { "Content-Type": "application/json" } }
+    );
+    if (response.ok) {
+      const data = await response.json();
+      setEboardEntries(data);
+      localStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({ data, timestamp: Date.now() })
+      );
+    }
+    ```
+    No `Authorization` header is sent — the `/eboard` endpoint is public.
+  </Step>
+  <Step title="Handle errors gracefully">
+    If the fetch throws or returns a non-OK status, `eboardEntries` is set to an empty array `[]` and no error message is shown in the UI, resulting in an empty grid rather than a broken page.
+  </Step>
+</Steps>
+
+## EboardFacultyEntry Type
+
+```ts
+export type EboardFacultyEntry = {
+  role:              string;           // e.g. "President", "Faculty Advisor"
+  role_email:        string;           // role-based email address
+  email:             string;           // personal email
+  display_email?:    string;           // preferred email to show publicly
+  profile_photo_url?: string;          // optional headshot URL
+  name:              string | null;    // full name (null if not yet assigned)
+  major:             string | null;    // declared major
+  rank?:             number;           // sort order (lower = displayed first)
+};
+```
+
+<Note>
+  `display_email` takes precedence over `role_email` which takes precedence over `email` when rendering the clickable email button. Clicking the email copies it to the clipboard via `navigator.clipboard.writeText()` and triggers a success toast.
+</Note>
+
+## Card Grid & Sort Order
+
+Entries are sorted ascending by `rank` before rendering, with unranked entries (`rank === undefined`) pushed to the end using `9999` as a fallback sort key:
+
+```ts
+[...eboardEntries]
+  .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
+  .map((entry, index) => <MemberCard key={index} entry={entry} />)
+```
+
+The grid uses a three-breakpoint column layout:
+
+| Breakpoint | Columns |
+|---|---|
+| Mobile (default) | 1 |
+| Tablet (`sm`) | 2 |
+| Desktop (`lg`) | 3 |
+
+## Card Content
+
+Each entry card is a white `shadow-xl` rounded tile (`p-6`) with centered content:
+
+<CardGroup cols={2}>
+  <Card title="Profile Photo" icon="user-circle">
+    Rendered as a `w-32 h-32` circular image (`rounded-full object-cover`) when `profile_photo_url` is present. If the field is absent the photo section is omitted entirely.
+  </Card>
+  <Card title="Name" icon="identification">
+    Displays `entry.name` or a dash (`"—"`) if `name` is `null`. This handles in-progress board transitions where a seat is defined but not yet filled.
+  </Card>
+  <Card title="Role" icon="briefcase">
+    Displayed in maroon (`text-bapred`) below the name. This is the primary identifier for the card.
+  </Card>
+  <Card title="Major" icon="academic-cap">
+    Displayed in muted gray (`text-bapgray text-sm`) below the role. Empty string if `major` is `null`.
+  </Card>
+</CardGroup>
+
+### Email Copy Button
+
+If any of `display_email`, `role_email`, or `email` is present, a clickable `<button>` renders the address in maroon with an underline on hover. Clicking it:
+
+1. Calls `navigator.clipboard.writeText(...)` with the resolved email.
+2. Fires `showToast("Role email copied to clipboard!", "success")` from the `ToastContext`.
+
+```tsx
+<button
+  type="button"
+  title="Copy role email to clipboard"
+  onClick={() => {
+    navigator.clipboard.writeText(
+      entry.display_email || entry.role_email || entry.email
+    );
+    showToast("Role email copied to clipboard!", "success");
+  }}
+>
+  {entry.display_email || entry.role_email || entry.email}
+</button>
+```
+
+## Page Layout Summary
+
+```
+EboardFacultyPage
+├── Navbar (public nav, white bg, maroon outline, role prop forwarded)
+├── main
+│   └── section (py-16 pt-32)
+│       └── max-w-6xl container
+│           ├── <h1> Executive Board & Faculty
+│           └── grid (1 → 2 → 3 cols)
+│               └── EboardFacultyEntry cards, sorted by rank asc
+└── Footer (backgroundColor="#AF272F")
+```
+
+<Tip>
+  The `role` prop is passed to `Navbar` so the navbar can conditionally expose the admin dashboard link without needing its own context call. Even on the public e-board page, an authenticated admin will still see the full authenticated navigation.
+</Tip>

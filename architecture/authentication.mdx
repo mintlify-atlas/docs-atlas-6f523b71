@@ -1,0 +1,345 @@
+---
+title: "Authentication Architecture for BAP Beta Tau Frontend"
+sidebarTitle: "Authentication"
+description: "Full documentation of the Google OAuth flow, Supabase session management, backend role fetching, the useAuth() hook, 30-second revalidation, and role types."
+---
+
+Authentication in the BAP Beta Tau frontend is a two-stage process. The first stage is identity verification: the user signs in with Google through Supabase, which establishes a session and stores a JWT access token in `localStorage`. The second stage is authorization: the application takes that JWT and sends it to the backend's `POST /users` endpoint along with the user's email, receiving back a role object that determines which pages the user can access. Both stages must succeed for `isAuthenticated` to be `true`. This separation of concerns — Supabase owns identity, the backend owns authorization — means the frontend never queries the database directly and all member data is gated by the backend's own access control logic.
+
+## The Auth Flow, End to End
+
+```
+User clicks "Sign in with Google"
+         │
+         ▼
+  Supabase initiates Google OAuth redirect
+         │
+         ▼
+  Google consent screen → user approves
+         │
+         ▼
+  Supabase callback → session created
+  access_token (JWT) + user.email stored in localStorage
+         │
+         ▼
+  AuthProvider: onAuthStateChange fires
+  → fetchUserRole(access_token, email) called
+         │
+         ▼
+  POST ${VITE_BACKEND_URL}/users
+  Headers: Authorization: Bearer <access_token>
+  Body:    { user_email: email }
+         │
+    ┌────┴────┐
+   200       4xx/5xx
+    │          │
+    ▼          ▼
+  setRole(data)    setRole(null)
+  setAuthError(null)  setAuthError("error message")
+         │
+         ▼
+  isAuthenticated = !!session && !!role && !authError
+         │
+    ┌────┴────┐
+   true      false
+    │          │
+    ▼          ▼
+  ProtectedRoute    Redirect to /login
+  renders <Outlet>  (or show error on /auth/Home)
+```
+
+## Supabase Client Initialization
+
+The Supabase client is created once in `src/context/auth/supabaseClient.ts` and imported wherever auth operations are needed:
+
+```typescript
+// src/context/auth/supabaseClient.ts
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL     = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    storage: localStorage,   // Session persists across page refreshes
+  },
+});
+```
+
+Setting `storage: localStorage` means the Supabase session (including the JWT access token and refresh token) survives browser tab closures and page refreshes. On the next visit, `getSession()` returns the cached session immediately, so the user does not have to re-authenticate.
+
+<Note>
+  A migration to HttpOnly cookies for session storage is planned. HttpOnly cookies are inaccessible to JavaScript, which eliminates the XSS risk of storing JWTs in `localStorage`. Until that migration is complete, session tokens remain in `localStorage`. Do not store additional sensitive data in `localStorage` in the meantime.
+</Note>
+
+## The `AuthProvider` Component
+
+`AuthProvider` is the top-level context provider that wraps the entire application. It manages four pieces of state: `session`, `role`, `loading`, and `authError`.
+
+```tsx
+// src/context/auth/authProvider.tsx (abridged)
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [session,   setSession]   = useState<Session | null>(null);
+  const [role,      setRole]      = useState<RoleType>(null);
+  const [loading,   setLoading]   = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // ...
+  const isAuthenticated = !!session && !!role && !authError;
+
+  return (
+    <AuthContext.Provider
+      value={{ session, role, loading, authError, isAuthenticated,
+               setSession, setRole, setAuthError }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+};
+```
+
+### Initialization Sequence
+
+When the app first mounts, `AuthProvider` runs `initializeAuth()` inside a `useEffect`:
+
+1. Calls `supabase.auth.getSession()` to check for an existing session in `localStorage`.
+2. Sets `session` immediately so components can observe it.
+3. If a session exists and `user.email` is present, calls `fetchUserRole(access_token, email)`.
+4. If no session is found, sets `loading = false` — the app is ready to show the login page.
+
+```tsx
+const initializeAuth = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  setSession(session);
+
+  if (session?.user?.email) {
+    await fetchUserRole(session.access_token, session.user.email);
+  } else {
+    setLoading(false);
+  }
+};
+```
+
+### Auth State Change Listener
+
+Supabase fires `onAuthStateChange` whenever the session changes — on sign-in, sign-out, or token refresh. The `AuthProvider` subscribes to this event and re-fetches the role whenever a new session is detected:
+
+```tsx
+const { data: authListener } = supabase.auth.onAuthStateChange(
+  (_, newSession) => {
+    setSession(newSession);
+
+    if (newSession?.user?.email) {
+      fetchUserRole(newSession.access_token, newSession.user.email);
+    } else {
+      setRole(null);
+      setLoading(false);
+    }
+  }
+);
+```
+
+The subscription is cleaned up on unmount:
+
+```tsx
+return () => {
+  authListener.subscription.unsubscribe();
+  clearInterval(roleValidationInterval);
+};
+```
+
+## Role Fetching: `POST /users`
+
+The `fetchUserRole` function is the bridge between Supabase's identity layer and the backend's authorization layer:
+
+```typescript
+// src/context/auth/authProvider.tsx
+const fetchUserRole = async (token: string, email: string) => {
+  try {
+    const response = await fetch(
+      `${import.meta.env.VITE_BACKEND_URL}/users`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ user_email: email }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json()
+        .catch(() => ({ error: "Failed to authenticate" }));
+      const errorMessage = errorData.error || "Failed to authenticate";
+      setRole(null);
+      setAuthError(errorMessage);
+      // AuthHome page handles sign-out after displaying the error
+    } else {
+      const data = await response.json();
+      setRole(data);
+      setAuthError(null);
+    }
+  } catch (error) {
+    console.error("Error fetching role:", error);
+    setAuthError("Network error. Please try again.");
+    setRole(null);
+  } finally {
+    setLoading(false);
+  }
+};
+```
+
+**On success:** The JSON body from `POST /users` is set directly as the `role` value. The shape depends on the role type (see [Role Types](#role-types) below).
+
+**On failure:** `role` is set to `null` and `authError` receives the error message from the backend. Importantly, the session is **not** immediately cleared on failure — the `AuthHome` page renders first and displays the error, giving the user context before signing them out.
+
+## 30-Second Role Revalidation
+
+The `AuthProvider` runs a `setInterval` that silently re-fetches the user's role from the backend every 30 seconds while the app is open:
+
+```typescript
+const roleValidationInterval = setInterval(async () => {
+  const { data: { session: currentSession } } = await supabase.auth.getSession();
+
+  if (currentSession?.user?.email) {
+    // Silent revalidation — loading state is not reset to true
+    await fetchUserRole(currentSession.access_token, currentSession.user.email);
+  }
+}, 30000); // 30,000 ms = 30 seconds
+```
+
+This serves two purposes:
+
+1. **Revocation detection:** If an e-board officer removes a member's access in the admin panel, the frontend will reflect that change within 30 seconds without requiring a page refresh.
+2. **Token freshness:** The Supabase `getSession()` call also handles JWT refresh under the hood, so the access token passed to the backend remains valid.
+
+<Warning>
+  The 30-second interval runs unconditionally while the app is mounted. Every tab the user has open will make these background requests independently. If the app scales to many concurrent users, consider switching to a WebSocket or Server-Sent Events approach for push-based invalidation.
+</Warning>
+
+## `isAuthenticated` Computation
+
+```typescript
+const isAuthenticated = !!session && !!role && !authError;
+```
+
+All three conditions must be satisfied:
+
+| Condition | Meaning |
+|---|---|
+| `!!session` | A valid Supabase session exists (the user has completed Google OAuth). |
+| `!!role` | The backend `POST /users` call returned a successful role payload. |
+| `!authError` | No error occurred during the role fetch (e.g., user not found in backend DB). |
+
+`isAuthenticated` is exposed through the `useAuth()` hook and is the value read by `Navbar` to determine which nav links to show.
+
+## The `useAuth()` Hook
+
+Any component inside `AuthProvider` can access auth state by calling `useAuth()`:
+
+```typescript
+import { useAuth } from "../../context/auth/authProvider";
+
+// Inside any component:
+const {
+  session,         // Supabase Session | null
+  role,            // RoleType (string | SponsorRole | null)
+  loading,         // boolean — true while auth is initializing
+  authError,       // string | null — error message from POST /users
+  isAuthenticated, // boolean — session && role && !authError
+  setSession,      // (session: Session | null) => void
+  setRole,         // (role: RoleType) => void
+  setAuthError,    // (error: string | null) => void
+} = useAuth();
+```
+
+<Warning>
+  `useAuth()` throws an error if called outside of an `AuthProvider`. Since `AuthProvider` wraps the entire app in `App.tsx`, this is only a risk in tests or Storybook stories that render components in isolation. Wrap such components in `<AuthProvider>` in your test setup.
+</Warning>
+
+## Role Types
+
+Roles are stored in the React context as the `RoleType` union:
+
+```typescript
+// src/context/auth/authProvider.tsx
+type SponsorRole = {
+  type: "sponsor";
+  companyName: string;
+};
+
+export type RoleType = string | SponsorRole | null;
+```
+
+There are three role values the backend can return:
+
+<CardGroup cols={3}>
+  <Card title="e-board" icon="shield">
+    **String role.** Full administrative access. Unlocks the `/admin` dashboard with member, event, announcement, sponsor, resource, and e-board management.
+  </Card>
+  <Card title="general-member" icon="user">
+    **String role.** Standard member access. Unlocks `/member` (personal dashboard), all networking pages, events detail, and resources. Feature access is further gated by `rank` via `canAccessFeature()`.
+  </Card>
+  <Card title="sponsor" icon="building">
+    **Object role** (`SponsorRole`). Unlocks `/sponsor` (sponsor portal). Also carries `companyName` so the portal can display the sponsor's company name without an additional API call.
+  </Card>
+</CardGroup>
+
+The `checkRole` helper in `ProtectedRoute` handles both shapes:
+
+```typescript
+const checkRole = (roleType: string) => {
+  if (typeof role === "string") {
+    return role.includes(roleType);        // "e-board", "general-member"
+  } else if (typeof role === "object" && role !== null) {
+    return role.type === roleType;         // { type: "sponsor", companyName: "..." }
+  }
+  return false;
+};
+```
+
+## Rank-Based Feature Access
+
+Within the `general-member` role, access to specific features is further restricted by a member's `rank` field (returned as part of the member profile from the backend, not from `POST /users`). The `canAccessFeature` utility in `src/utils/permissions.ts` centralizes this logic:
+
+```typescript
+// src/utils/permissions.ts
+export type PermissionFeature =
+  | 'event-rsvp'
+  | 'event-checkin'
+  | 'announcements'
+  | 'slack-access';
+
+export const canAccessFeature = (
+  rank: string | undefined,
+  feature: PermissionFeature
+): boolean => {
+  const normalizedRank = rank?.toLowerCase();
+
+  if (normalizedRank === "alumni") {
+    // Alumni cannot RSVP, check in, see announcements, or access Slack
+    const alumniBlockedFeatures: PermissionFeature[] = [
+      'event-rsvp', 'event-checkin', 'announcements', 'slack-access',
+    ];
+    return !alumniBlockedFeatures.includes(feature);
+  }
+
+  return true; // Pledges and inducted members have full access
+};
+```
+
+| Rank | `event-rsvp` | `event-checkin` | `announcements` | `slack-access` |
+|---|---|---|---|---|
+| `pledge` | ✅ | ✅ | ✅ | ✅ |
+| `inducted` | ✅ | ✅ | ✅ | ✅ |
+| `alumni` | ❌ | ❌ | ❌ | ❌ |
+
+## Sign-Out Flow
+
+Sign-out is handled by the `LogOut` component (`src/components/logOut/LogOut.tsx`), which calls `supabase.auth.signOut()`. Supabase clears the session from `localStorage` and fires `onAuthStateChange` with `newSession = null`. The `AuthProvider` listener then sets `session = null`, `role = null`, and `loading = false`. Because `isAuthenticated` becomes `false`, the `Navbar` re-renders with the public nav links, and any protected route the user is on will redirect them to `/login` on the next render.
+
+## Planned: HttpOnly Cookie Migration
+
+The current implementation stores the Supabase session (JWT access token and refresh token) in `localStorage`. While convenient, `localStorage` is accessible to any JavaScript running on the page, making it a target for XSS attacks. The planned migration will switch `storage` in the Supabase client config to use HttpOnly cookies managed by a thin server-side proxy, so that session tokens are never visible to client JavaScript. Until this migration is complete, keep the CSP headers on the Vercel deployment restrictive and avoid injecting third-party scripts that could read `localStorage`.

@@ -1,0 +1,323 @@
+---
+title: "Reusable Components: Props, Behavior, and Usage Examples"
+sidebarTitle: "Components"
+description: "Reference for all shared components in the BAP Beta Tau frontend: ProtectedRoute, NetworkList, EventCard, LoadingSpinner, ConfirmDialog, and ProfilePictureUpload."
+---
+
+The BAP Beta Tau frontend organises reusable UI into three directories: `src/components/common/` for generic utility components, `src/components/network/` for directory-display components, `src/components/event/` for event-specific components, and `src/components/protectedRoute/` for route guards. This page documents the props, behavior, and usage patterns of each key shared component.
+
+---
+
+## ProtectedRoute
+
+**Path:** `src/components/protectedRoute/ProtectedRoute.tsx`
+
+`ProtectedRoute` is a React Router wrapper that guards authenticated routes. It consumes `useAuth()` and renders the child `<Outlet>` only when the user passes both authentication and role-permission checks.
+
+### Behavior
+
+<Steps>
+  <Step title="Loading state">
+    While `loading === true` (auth check in progress), a full-screen `LoadingSpinner` is shown. This prevents content flash.
+  </Step>
+  <Step title="Unauthenticated">
+    If `session` is `null`, the attempted URL is saved to `localStorage.redirectAfterLogin` and the user is redirected to `/login`.
+  </Step>
+  <Step title="Permission check">
+    `hasPermission()` maps the current path to required roles:
+    - `/admin` → requires `"e-board"` role
+    - `/sponsor` → requires `"sponsor"` role (string or `{ type: "sponsor" }` object)
+    - `/member` → requires `"general-member"` role
+    - All other protected paths → any authenticated role
+  </Step>
+  <Step title="Role mismatch">
+    If the user is authenticated but lacks the required role, they are redirected to `/auth/Home`.
+  </Step>
+  <Step title="Authenticated">
+    `<Outlet />` renders — the matched child route component is displayed.
+  </Step>
+</Steps>
+
+### Usage in App.tsx
+
+```tsx
+import ProtectedRoute from "./components/protectedRoute/ProtectedRoute";
+
+<Route element={<ProtectedRoute />}>
+  <Route path="/auth/Home" element={<AuthHome />} />
+  <Route path="/admin"     element={<Admin />} />
+  <Route path="/sponsor"   element={<SponsorHome />} />
+  <Route path="/member"    element={<MemberView />} />
+  <Route path="/network"   element={<NetworkingPage />} />
+  {/* ... other protected routes */}
+</Route>
+```
+
+<Note>
+  `/auth/Home` is intentionally excluded from the `hasPermission` check — a user can reach it even if `role` is `null`. This allows the error state (e.g., archived member) to be displayed before the session is fully cleared.
+</Note>
+
+---
+
+## NetworkList
+
+**Path:** `src/components/network/NetworkList.tsx`
+
+`NetworkList` renders a responsive card grid for any mix of `MemberDetail` and `Sponsor` entities. It is used on the Members, Alumni, E-board, and Sponsors Network pages.
+
+```typescript
+interface NetworkListProps {
+  entities: (MemberDetail | Sponsor)[];
+}
+```
+
+### Rendering Logic
+
+Each card conditionally shows fields based on `entity.type`:
+
+| Field | Member card | Sponsor card |
+|---|---|---|
+| Photo / logo | Round avatar | Round logo |
+| Subtitle | `entity.major` | Tier badge (e.g., "Gold Sponsor") |
+| Email | ✅ | ❌ |
+| Total hours | ✅ (hidden for alumni) | ❌ |
+| First link | ✅ | ❌ |
+| About (2-line clamp) | ✅ | ✅ |
+| All links | ❌ | ✅ |
+| Rank / Status | ✅ | ❌ |
+
+Clicking any card or its **View Profile** / **View Sponsor** button opens the appropriate modal:
+- `MemberDetail` → `NetworkProfileModal`
+- `Sponsor` → `SponsorProfileModal`
+
+### Grid Layout
+
+```
+Mobile:  1 column
+sm:      2 columns
+lg:      3 columns
+```
+
+### Example
+
+```tsx
+import NetworkList from "../components/network/NetworkList";
+import { Sponsor } from "../types";
+
+<NetworkList entities={sortedSponsors} />
+```
+
+---
+
+## EventCard
+
+**Path:** `src/components/event/EventCard.tsx`
+
+`EventCard` renders a single event in a white card. Its visible actions and data fields change based on the current user's role — members see RSVP and check-in buttons, while e-board members also see edit, delete, and participant management controls.
+
+```typescript
+interface EventCardProps {
+  event: EventType;         // MemberEvent | AdminEvent
+  isPast: boolean;          // Disables future-only actions
+  isHighlighted?: boolean;  // Applies a red ring border
+  registerRef?: (element: HTMLDivElement | null) => void;
+  hideRSVP?: boolean;
+  userRank?: string;        // Passed from parent to detect alumni
+  rankLoading?: boolean;
+  onEdit?: () => void;      // E-board: open edit form
+  onAnnounce?: () => void;  // E-board: send announcement
+  onDelete?: () => void;    // E-board: delete event
+  onCheckInSuccess?: () => void;
+}
+```
+
+### Role-Aware Actions
+
+| Action | Roles | Condition |
+|---|---|---|
+| RSVP button | `general-member`, `sponsor` | `!isPast && !hideRSVP && !isAlumni` |
+| Check-in button | `general-member` | `!isPast && !isAlumni` |
+| Edit (⋯) button | `e-board` | `onEdit` prop provided |
+| Announce (📣) button | `e-board` | `onAnnounce` prop + `!isPast` |
+| Delete (🗑) button | `e-board` | `onDelete` prop provided |
+| RSVPs & Attendees panel | `e-board` | Always visible, lazy-loaded |
+
+### E-Board Participant Panel
+
+When the collapsible "RSVPs and Attendees" panel is opened, the card fetches detailed participant data from `GET /events/:eventId/participants`. E-board members can also:
+
+- **Add RSVPs** — search active members and bulk-RSVP them via `POST /events/rsvp/:eventId`
+- **Remove RSVPs** — via `POST /events/unrsvp/:eventId` with `{ user_email }`
+- **Add Attendees** — via `POST /events/add-member-attending`
+- **Remove Attendees** — via `POST /events/delete-member-attending`
+
+### Helper Export
+
+```typescript
+export const formatDateTime = (date?: string, time?: string | null): string | null
+```
+
+Formats a `YYYY-MM-DD` date string and optional `HH:MM:SS` time string into a locale-aware human-readable string such as `"Monday, January 20, 2025 at 6:00 PM"`.
+
+### Example
+
+```tsx
+import { EventCard } from "../components/event/EventCard";
+
+<EventCard
+  event={event}
+  isPast={new Date(event.event_date) < new Date()}
+  onEdit={() => setEditingEvent(event)}
+  onDelete={() => handleDelete(event.id)}
+/>
+```
+
+---
+
+## LoadingSpinner
+
+**Path:** `src/components/common/LoadingSpinner.tsx`
+
+A minimal animated spinner with optional text label. Used throughout the app for async loading states.
+
+```typescript
+interface LoadingSpinnerProps {
+  text?: string;              // Default: "Loading..."
+  size?: 'sm' | 'md' | 'lg'; // Default: "md"
+}
+```
+
+| Size | Spinner dimensions |
+|---|---|
+| `sm` | 16 × 16 px (`h-4 w-4`) |
+| `md` | 20 × 20 px (`h-5 w-5`) |
+| `lg` | 32 × 32 px (`h-8 w-8`) |
+
+```tsx
+// Inline use — show text
+<LoadingSpinner text="Loading sponsor information..." size="lg" />
+
+// Logo overlay — no text
+<LoadingSpinner text="" size="md" />
+```
+
+The spinner is an SVG with `animate-spin` class and a `text-gray-500` color. Both the circle and path use `currentColor`, so the spinner inherits its color from the surrounding text color.
+
+---
+
+## ConfirmDialog
+
+**Path:** `src/components/common/ConfirmDialog.tsx`
+
+A portal-mounted modal dialog for confirmation prompts. Renders into `document.body` via `createPortal`, so it appears above all other content regardless of stacking context.
+
+```typescript
+interface ConfirmDialogProps {
+  isOpen: boolean;
+  onClose: (e?: React.MouseEvent) => void;
+  onConfirm: (e?: React.MouseEvent) => void;
+  title: string;
+  message: string;
+  confirmText?: string;        // Default: "Confirm"
+  cancelText?: string;         // Default: "Cancel"
+  preventOutsideClick?: boolean; // Default: false
+}
+```
+
+Internally wraps the shared `Modal` UI component with `size="sm"` and `zIndex="z-[10000]"` to ensure it renders above other modals (such as `ProfileEditModal`).
+
+```tsx
+<ConfirmDialog
+  isOpen={showDeleteConfirmation}
+  onClose={() => setShowDeleteConfirmation(false)}
+  onConfirm={executeDelete}
+  title="Confirm Deletion"
+  message={`Delete "${resourceToDelete?.label}"? This cannot be undone.`}
+  confirmText="Delete"
+  cancelText="Cancel"
+  preventOutsideClick={true}
+/>
+```
+
+<Warning>
+  Always set `preventOutsideClick={true}` for destructive actions (delete, archive) to prevent accidental dismissal. Leave it `false` for lower-stakes prompts like "discard unsaved changes."
+</Warning>
+
+---
+
+## ProfilePictureUpload
+
+**Path:** `src/components/common/ProfilePictureUpload.tsx`
+
+A reusable profile photo widget that handles upload preview, upload-in-progress overlay, and delete confirmation. Used inside `ProfileEditModal` for sponsor logos and potentially member profile photos.
+
+```typescript
+interface ProfilePictureUploadProps {
+  currentProfileUrl: string | null;
+  onFileSelect: (file: File) => Promise<void>;   // Called immediately on selection
+  onDelete: () => Promise<void>;                 // Called after delete confirmed
+  uploading: boolean;                            // Shows spinner overlay when true
+  altText: string;                               // img alt attribute
+  showDeleteConfirmationDialog: (show: boolean) => void;
+  isDeleteConfirmationDialogVisible: boolean;
+  confirmDeleteAction: () => void;
+  cancelDeleteAction: () => void;
+  // Optional styling overrides
+  recommendedSizeText?: string;          // Default: "Recommended size: 250x250px square image"
+  placeholderImageUrl?: string;          // Default: "/placeholder-logo.png"
+  imageContainerClassName?: string;
+  imageClassName?: string;
+  uploadButtonClassName?: string;
+  deleteButtonClassName?: string;
+}
+```
+
+### Key Behaviors
+
+- A `+` button (bottom-right of image) opens the OS file picker. Only `image/*` MIME types are accepted.
+- When a file is selected, `URL.createObjectURL` generates a local preview immediately while `onFileSelect` fires asynchronously. If upload fails, the preview is revoked.
+- A `🗑` button (top-right) triggers the delete confirmation flow via `showDeleteConfirmationDialog(true)`.
+- The delete button is hidden when `currentProfileUrl` equals `placeholderImageUrl` (no real photo to delete).
+- An upload overlay (semi-transparent black, animated spinner) covers the image while `uploading === true`.
+
+```tsx
+<ProfilePictureUpload
+  currentProfileUrl={currentPfpUrl}
+  onFileSelect={handlePfpFileSelect}
+  onDelete={handlePfpDelete}
+  uploading={isUploadingPfp}
+  altText={`${sponsorName} Logo`}
+  showDeleteConfirmationDialog={setShowPfpDeleteConfirm}
+  isDeleteConfirmationDialogVisible={showPfpDeleteConfirm}
+  confirmDeleteAction={() => {}}
+  cancelDeleteAction={() => setShowPfpDeleteConfirm(false)}
+/>
+```
+
+---
+
+## useToast Hook
+
+**Path:** `src/context/toast/ToastContext.tsx`
+
+Provides access to the global toast notification system defined in `App.tsx`.
+
+```typescript
+const { showToast } = useToast();
+// Signature:
+showToast(message: string, type?: "success" | "error" | "info", duration?: number): void
+// Defaults: type = "success", duration = 3000 (ms)
+```
+
+```tsx
+// In EventCard.tsx:
+const { showToast } = useToast();
+
+await fetchParticipants();
+showToast("RSVP removed successfully", "success");
+
+// On error:
+showToast("Failed to remove RSVP", "error");
+```
+
+The toast renders as an overlay `Toast` component in `App.tsx` and auto-dismisses after `duration` milliseconds.

@@ -1,0 +1,161 @@
+---
+title: "Sponsors Page — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "Sponsors"
+description: "Covers the Sponsors page data flow from the public API, the four-tier display hierarchy, and the SponsorCard and SponsorTier component interfaces."
+---
+
+The Sponsors page (`/sponsors`) publicly showcases every organization that supports the Beta Tau Chapter. It fetches live sponsor data from the backend on mount, maps the raw API response to a normalized internal shape, then buckets sponsors into four tiers — **Platinum**, **Gold**, **Silver**, and **Bronze** — rendering each tier in a responsive wrap layout using `SponsorTier` and `SponsorCard` sub-components. No authentication is required to view the page.
+
+## Data Flow
+
+Data loading is split across two `useEffect` hooks to keep concerns cleanly separated: the first fetches and normalizes data, the second reacts to `sponsors` state changes to sort into tier-specific arrays.
+
+<Steps>
+  <Step title="Fetch from public sponsors endpoint">
+    ```ts
+    const response = await fetch("https://asubap-backend.vercel.app/sponsors/");
+    const data: ApiSponsorData[] = await response.json();
+    ```
+    If the response is not `ok` the error is thrown and caught by the `catch` block, leaving `sponsors` as an empty array. No loading or error state is currently exposed to the UI.
+  </Step>
+  <Step title="Normalize API response shape">
+    The raw API fields `company_name` and `pfp_url` are remapped to the component-internal `name` and `imageUrl` fields:
+
+    ```ts
+    const formattedSponsors = data.map((apiSponsor: ApiSponsorData) => ({
+      id:       apiSponsor.id,
+      name:     apiSponsor.company_name,  // ← renamed
+      tier:     apiSponsor.tier,
+      imageUrl: apiSponsor.pfp_url,       // ← renamed
+    }));
+    setSponsors(formattedSponsors);
+    ```
+  </Step>
+  <Step title="Sort into tier buckets">
+    A second `useEffect` watches the `sponsors` array and, whenever it is non-empty, populates four derived state arrays via `Array.prototype.filter`:
+
+    ```ts
+    setPlatinumSponsors(sponsors.filter(s => s.tier === "platinum"));
+    setGoldSponsors(    sponsors.filter(s => s.tier === "gold"));
+    setSilverSponsors(  sponsors.filter(s => s.tier === "silver"));
+    setBronzeSponsors(  sponsors.filter(s => s.tier === "bronze"));
+    ```
+  </Step>
+</Steps>
+
+## TypeScript Interfaces
+
+<CodeGroup>
+```ts API Shape (raw)
+interface ApiSponsorData {
+  id:           number;
+  company_name: string;
+  tier:         "platinum" | "gold" | "silver" | "bronze";
+  pfp_url:      string;
+  // additional optional fields: about, links, emails, uuid, resources
+}
+```
+
+```ts Internal Shape (normalized)
+interface Sponsor {
+  id:       number;
+  name:     string;   // mapped from company_name
+  tier:     "platinum" | "gold" | "silver" | "bronze";
+  imageUrl: string;   // mapped from pfp_url
+}
+```
+</CodeGroup>
+
+## Tier Hierarchy
+
+Tiers are rendered top-to-bottom in prestige order. A tier section is only mounted when it has at least one sponsor (`sponsors.length > 0` guard), so empty tiers produce no DOM output.
+
+<CardGroup cols={2}>
+  <Card title="Platinum" icon="trophy">
+    Highest tier. `SponsorCard` receives `shadow-xl` for the most prominent card shadow. Tier heading color: `text-bapgray` (dark gray).
+  </Card>
+  <Card title="Gold" icon="star">
+    Second tier. `SponsorCard` receives `shadow-lg`. Tier heading color: `text-yellow-600`.
+  </Card>
+  <Card title="Silver" icon="circle">
+    Third tier. `SponsorCard` receives `shadow-md`. Tier heading color: `text-gray-400`.
+  </Card>
+  <Card title="Bronze" icon="circle-stack">
+    Fourth tier. `SponsorCard` receives `shadow` (default Tailwind shadow). Tier heading color: `text-amber-800`.
+  </Card>
+</CardGroup>
+
+## SponsorTier Component
+
+```ts
+interface SponsorTierProps {
+  tier:     "Platinum" | "Gold" | "Silver" | "Bronze";
+  children: React.ReactNode;
+}
+```
+
+`SponsorTier` renders a `<section>` with a centered tier heading and a `flex flex-wrap justify-center` container for its `SponsorCard` children. Each tier heading applies the tier-specific color class shown above.
+
+```tsx
+// SponsorTier renders:
+<section className="mb-16 w-full max-w-7xl mx-auto px-4">
+  <h2 className={`text-4xl font-bold font-outfit ${tierColors[tier]} text-center mb-8`}>
+    {tier}
+  </h2>
+  <div className="flex flex-wrap justify-center items-center gap-4">
+    {children}
+  </div>
+</section>
+```
+
+## SponsorCard Component
+
+```ts
+interface SponsorCardProps {
+  name:     string;
+  imageUrl: string;
+  tier?:    "platinum" | "gold" | "silver" | "bronze"; // defaults to "gold"
+}
+```
+
+Each card is a fixed `w-56 h-56` white rounded tile. The upper three-quarters hold the sponsor logo (`object-contain`); the lower quarter displays the company name. Cards have a `hover:scale-105` scale transition.
+
+```tsx
+// SponsorCard shadow per tier
+const tierStyles = {
+  platinum: "shadow-xl",
+  gold:     "shadow-lg",
+  silver:   "shadow-md",
+  bronze:   "shadow",
+};
+
+<div className={`bg-white rounded-lg ${tierStyles[tier]} w-56 h-56 ...`}>
+  <img src={imageUrl} alt={`${name} logo`} className="object-contain max-w-full max-h-full" />
+  <h3 className="text-center font-bold text-bapgray font-outfit text-sm sm:text-base">
+    {name}
+  </h3>
+</div>
+```
+
+## Page-Level Layout
+
+```
+SponsorsPage
+├── Navbar (public nav, white bg, maroon outline)
+├── main
+│   ├── <h1> Our Sponsors
+│   ├── <p> Thank-you blurb
+│   ├── SponsorTier tier="Platinum" (if platinumSponsors.length > 0)
+│   │   └── SponsorCard × N
+│   ├── SponsorTier tier="Gold"    (if goldSponsors.length > 0)
+│   │   └── SponsorCard × N
+│   ├── SponsorTier tier="Silver"  (if silverSponsors.length > 0)
+│   │   └── SponsorCard × N
+│   └── SponsorTier tier="Bronze"  (if bronzeSponsors.length > 0)
+│       └── SponsorCard × N
+└── Footer (backgroundColor="#AF272F")
+```
+
+<Note>
+  The sponsors endpoint (`https://asubap-backend.vercel.app/sponsors/`) is called with a plain `fetch` — no `Authorization` header. This is intentional: sponsor data is public. The authenticated sponsors-network page (`/sponsors-network`) is a separate route available only to logged-in members.
+</Note>

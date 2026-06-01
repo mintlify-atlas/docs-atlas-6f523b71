@@ -1,0 +1,208 @@
+---
+title: "Events Page — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "Events"
+description: "Covers the Events page endpoint selection, three-section layout, search, past-event pagination, calendar subscribe, and role-gated RSVP, check-in, and admin controls."
+---
+
+The Events page (`/events`) is the central hub for all chapter activities and is accessible to every visitor without a login. The page dynamically adjusts its capabilities based on the authenticated role: anonymous visitors can browse events freely; authenticated general members and sponsors can RSVP and check in; e-board administrators gain the ability to create, edit, delete, announce, and toggle the visibility of events. All data fetching uses a single `useEffect` that re-runs whenever `session` or `authLoading` changes, so the event list automatically refreshes after login without a page reload.
+
+## Endpoint Selection
+
+The fetch endpoint and request headers differ based on whether a session token is present:
+
+```ts
+const endpoint = session?.access_token
+  ? `${import.meta.env.VITE_BACKEND_URL}/events`         // authenticated — full event data
+  : `${import.meta.env.VITE_BACKEND_URL}/events/public`; // unauthenticated — public subset
+
+const headers: HeadersInit = { "Content-Type": "application/json" };
+if (session?.access_token) {
+  headers["Authorization"] = `Bearer ${session.access_token}`;
+}
+```
+
+An `AbortController` is wired to the fetch so in-flight requests are cancelled if the component unmounts mid-request or the session changes before the response arrives.
+
+## Event Type System
+
+<CodeGroup>
+```ts BaseEvent
+type BaseEvent = {
+  id:                string;
+  event_name:        string;
+  event_description: string;
+  event_location?:   string;
+  event_date:        string;
+  event_time?:       string;
+  dress_code?:       string;
+  event_hours?:      number;
+  event_hours_type?: string;
+  sponsors_attending?: string[];
+  event_limit?:      number;
+  rsvp_count:        number;
+  attending_count:   number;
+};
+```
+
+```ts MemberEvent (authenticated members/sponsors)
+type MemberEvent = BaseEvent & {
+  user_rsvped:     boolean;
+  user_attended:   boolean;
+  can_check_in:    boolean;
+  check_in_window?: number;
+  check_in_radius?: number;
+  event_lat?:      number | null;
+  event_long?:     number | null;
+};
+```
+
+```ts AdminEvent (e-board only)
+type AdminEvent = BaseEvent & {
+  event_lat:       number;
+  event_long:      number;
+  event_rsvped:    string[];
+  event_attending: string[];
+  is_hidden:       boolean;
+  check_in_window: number;
+  check_in_radius: number;
+  user_rsvped:     boolean;
+  user_attended:   boolean;
+};
+
+// Union used throughout the page:
+type Event = MemberEvent | AdminEvent;
+```
+</CodeGroup>
+
+## Three-Section Layout
+
+Events are partitioned into three sections based on the `isEventInSession()` utility and the current timestamp. Past events are sorted newest-first; upcoming events are sorted chronologically.
+
+<Tabs>
+  <Tab title="Events In-Session">
+    Events currently running (within their check-in window). The RSVP button is hidden (`hideRSVP={true}`) since the check-in window is open. Displayed with a `LoadingSpinner` while either the events fetch or the user-rank fetch is pending.
+  </Tab>
+  <Tab title="Upcoming Events">
+    Events whose `event_date + event_time` is in the future and are not currently in-session, sorted ascending by start time. E-board users see a **"+ New Event"** button in the section header that opens the `CreateEventModal`.
+  </Tab>
+  <Tab title="Past Events">
+    Events whose `event_date + event_time` is in the past. Rendered with `isPast={true}` which disables RSVP/check-in controls on the `EventCard`. The list is paginated — only `PAST_EVENTS_INCREMENT = 3` events show initially.
+
+    ```ts
+    const PAST_EVENTS_INCREMENT = 3;
+    const [visiblePastEventsCount, setVisiblePastEventsCount] = useState(PAST_EVENTS_INCREMENT);
+
+    // Load More button
+    const handleLoadMorePastEvents = () => {
+      setVisiblePastEventsCount(prev => prev + PAST_EVENTS_INCREMENT);
+    };
+
+    // Slice applied in JSX:
+    pastEvents.slice(0, visiblePastEventsCount).map(event => <EventCard ... />)
+    ```
+  </Tab>
+</Tabs>
+
+## Search
+
+A `SearchInput` component filters the event list in real time. The filter evaluates `event_name`, `event_location`, and `event_description` (all case-insensitive):
+
+```ts
+const filteredEvents = allEvents.filter((event) => {
+  // Hidden-status filter first
+  const isHiddenEvent = "is_hidden" in event && event.is_hidden;
+  if (showHidden ? !isHiddenEvent : isHiddenEvent) return false;
+
+  // Text search
+  const query = searchQuery.toLowerCase();
+  return (
+    event.event_name.toLowerCase().includes(query) ||
+    (event.event_location && event.event_location.toLowerCase().includes(query)) ||
+    (event.event_description && event.event_description.toLowerCase().includes(query))
+  );
+});
+```
+
+## Calendar Subscribe
+
+A `CalendarSubscribeButton` component sits in the toolbar row next to the search bar. It allows visitors to subscribe to the chapter's public event calendar (e.g., an `.ics` feed), so events appear in their personal calendars automatically.
+
+## Role-Gated Features
+
+<Accordion title="General Members & Sponsors — RSVP">
+  The `EventRSVP` sub-component renders on upcoming and in-session events for `role === "general-member"` or `role === "sponsor"`. It reads `user_rsvped` from the event object and shows a toggle. RSVPs are blocked if `event.rsvp_count >= event.event_limit` (`isRSVPFull`).
+
+  ```ts
+  // RSVP capacity check
+  const isRSVPFull = event.event_limit
+    ? event.rsvp_count >= event.event_limit
+    : false;
+  ```
+</Accordion>
+
+<Accordion title="General Members — Check-In">
+  The `EventCheckIn` sub-component renders for `role === "general-member"` on non-past events. Check-in availability is controlled by `can_check_in` from the API (requires the user to have RSVP'd and be within the geo-radius and time window). Alumni users (`isAlumni(userRank)`) are excluded from both RSVP and check-in controls.
+</Accordion>
+
+<Accordion title="E-Board — Event Management">
+  When `role === "e-board"`, each `EventCard` gains three icon buttons:
+
+  | Icon | Action | API call |
+  |---|---|---|
+  | `Megaphone` | Announce (upcoming only) | `POST /events/send-event` with `{ event_id, recipient_filter: "rsvped" }` |
+  | `MoreHorizontal` | Edit | Opens `EditEventModal` → `PUT` to update event |
+  | `Trash2` | Delete | `POST /events/delete-event` with `{ event_id }` |
+
+  Both destructive actions (delete, announce) require confirmation via `ConfirmationModal` before the API request is dispatched.
+</Accordion>
+
+<Accordion title="E-Board — Hidden Events Toggle">
+  A segmented control in the toolbar (`Standard` / `Hidden`) lets e-board users view hidden events. Only one mode is active at a time — switching to "Hidden" shows exclusively `is_hidden: true` events; "Standard" shows the normal public feed. This toggle is invisible to non-admin users.
+
+  ```ts
+  const [showHidden, setShowHidden] = useState(false);
+  // Applied in filteredEvents:
+  if (showHidden)  { if (!isHiddenEvent) return false; }
+  else             { if (isHiddenEvent)  return false; }
+  ```
+</Accordion>
+
+<Accordion title="E-Board — Participant Management">
+  Expanding the "RSVPs and Attendees" accordion on any EventCard triggers `GET /events/:id/participants`. The response is transformed client-side into `EventParticipants`:
+
+  ```ts
+  type EventParticipants = {
+    event_id:        string;
+    event_name:      string;
+    rsvped_users:    { user_id: string; name: string; user_email: string }[];
+    attending_users: { user_id: string; name: string; user_email: string; checked_in_at?: string }[];
+    rsvp_count:      number;
+    attending_count: number;
+  };
+  ```
+
+  E-board can also manually add RSVPs or attendees via search modals that hit `POST /events/rsvp/:id` and `POST /events/add-member-attending`, and remove them via `POST /events/unrsvp/:id` and `POST /events/delete-member-attending`.
+</Accordion>
+
+## User Rank Fetch
+
+To determine whether a logged-in member is alumni (and should therefore be blocked from RSVP/check-in), the page fetches the member's rank on mount and on window focus:
+
+```ts
+const response = await fetch(
+  `${import.meta.env.VITE_BACKEND_URL}/member-info/me`,
+  { headers: { Authorization: `Bearer ${session.access_token}` } }
+);
+const data = await response.json();
+if (data.rank) setUserRank(data.rank);
+```
+
+E-board users and unauthenticated users skip this fetch entirely — rank is only meaningful for the `general-member` and `sponsor` roles.
+
+## Deep-Link Highlighting
+
+The page supports a `location.state.highlightEventId` parameter (set by other pages navigating to a specific event). After events finish loading, the targeted `EventCard` is scrolled into view and receives a `ring-bapred` ring highlight for 2 seconds before fading back to `ring-transparent`.
+
+<Note>
+  Event refs are tracked in a `useRef<Map<string, HTMLDivElement>>` keyed by `event.id`. This avoids re-renders when refs are registered and ensures smooth scroll behavior even when the target event is in the past section (which requires the full list to be loaded first).
+</Note>

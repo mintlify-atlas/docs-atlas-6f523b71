@@ -1,0 +1,242 @@
+---
+title: "Member Dashboard: Profile, Hours & Events"
+sidebarTitle: "Member Dashboard"
+description: "Personal hub for Beta Alpha Psi members showing profile details, hours breakdown by category, attended events, and quick access to announcements and Slack."
+---
+
+The Member Dashboard (`/member`) is the primary landing destination for any authenticated `general-member`. It is wrapped in a `ProtectedRoute` and immediately calls `POST /member-info/` to hydrate the member's profile from the backend. The page is split into two side-by-side columns — the left column owned by `MemberDescription` handles identity and profile management, while the right column (`EventMember`) displays live event data. Alumni members see a reduced view: hours, announcements, and the Slack button are all conditionally hidden via `isAlumni()` from `utils/permissions.ts`.
+
+## Page Architecture
+
+The page composes three components inside `MemberView`:
+
+<CardGroup cols={3}>
+  <Card title="MemberDescription" icon="user">
+    Renders the profile card (photo, name, major, email, phone), the hours breakdown, the About section, and the Edit Profile button. Also owns the announcements bell and Slack shortcut.
+  </Card>
+  <Card title="EventMember" icon="calendar">
+    Independently fetches `GET /events` and categorises events into **In-Session**, **Upcoming**, and **Attended**. Uses `EventCard` for each row.
+  </Card>
+  <Card title="ProfileEditModal" icon="pencil">
+    A modal layered on top of `MemberDescription` that handles form state, profile-picture upload/delete, and the `POST /member-info/edit-member-info/` save call.
+  </Card>
+</CardGroup>
+
+## Data Flow
+
+<Steps>
+  <Step title="Session check">
+    `MemberView` reads the Supabase session from `useAuth()`. If no session exists, `ProtectedRoute` redirects to login before this page mounts.
+  </Step>
+  <Step title="Fetch member info">
+    `fetchUserDetails()` is called on mount and again whenever the browser tab regains focus (via a `visibilitychange` listener). It calls:
+
+    ```http
+    POST /member-info/
+    Authorization: Bearer <access_token>
+    Content-Type: application/json
+
+    { "user_email": "<email>" }
+    ```
+
+    The response array's first element is spread into `userDetails` state.
+  </Step>
+  <Step title="Render MemberDescription">
+    All user fields are forwarded as props. `onRefreshUserDetails` (a reference to `fetchUserDetails(false)`) is also passed so child components can trigger a silent refresh — for example, after a successful check-in.
+  </Step>
+  <Step title="EventMember fetch">
+    `EventMember` runs its own `GET /events` fetch inside `useEffect`. Events are sorted by `event_date` then partitioned by `isEventInSession()` and compared to `now`.
+  </Step>
+</Steps>
+
+## Profile Fields
+
+The `userDetails` shape returned from the backend and forwarded as props:
+
+```typescript
+{
+  id: string;
+  user_email: string;
+  name: string;
+  major: string;
+  phone: string;
+  graduating_year: string;
+  rank: string;                // "pledge" | "inducted" | "alumni"
+  member_status: string;       // "Looking for Internship" | "Looking for Full-time" | "Not Looking"
+  about: string;
+  total_hours: string;
+  development_hours: string;
+  professional_hours: string;
+  service_hours: string;
+  social_hours: string;
+  profile_photo_url?: string;
+  event_attendance: any[];
+}
+```
+
+<Note>
+  `rank` drives the `isAlumni()` check throughout the dashboard. When `rank === "alumni"`, the hours breakdown row, the announcements bell, and the Slack button are all removed from the DOM.
+</Note>
+
+## Hours Breakdown
+
+Non-alumni members see five numeric values displayed below their basic info:
+
+| Field | Backend key | Description |
+|---|---|---|
+| Total Hours | `total_hours` | Sum of all categories |
+| Social Hours | `social_hours` | Social event attendance |
+| Professional Hours | `professional_hours` | Professional development events |
+| Service Hours | `service_hours` | Community service events |
+| Development Hours | `development_hours` | Chapter development events |
+
+## Edit Profile Modal
+
+Clicking **Edit Profile** opens `ProfileEditModal`. The modal uses a `useRef` snapshot of the initial data to detect unsaved changes and prompts a discard-confirmation dialog on close if any field was modified.
+
+### Editable fields
+
+<Tabs>
+  <Tab title="Profile fields">
+    | Field | Input type | Required | Notes |
+    |---|---|---|---|
+    | Name | `text` | ✅ | Cannot be empty or `"N/A"` |
+    | Email | `email` | ✅ | Disabled — cannot change |
+    | Phone Number | `tel` | ✅ | |
+    | Major(s) | `text` | ✅ | Free-text; multiple majors as one string |
+    | Graduation Year | `text` | ✅ | |
+    | Status | `select` | ✅ | `Looking for Internship` / `Looking for Full-time` / `Not Looking` |
+    | About | `textarea` | ✅ | Minimum 1 non-`"N/A"` character |
+  </Tab>
+  <Tab title="Profile picture">
+    Profile pictures are handled separately from the form. Upload goes to:
+
+    ```http
+    POST /member-info/<email>/pfp
+    Authorization: Bearer <access_token>
+    Content-Type: multipart/form-data
+
+    file: <File>
+    ```
+
+    Deletion goes to:
+
+    ```http
+    DELETE /member-info/<email>/pfp
+    Authorization: Bearer <access_token>
+    ```
+
+    A profile picture is **required** to save the form — the submit handler checks `currentPfpUrl` and blocks save with a toast error if no image is present.
+  </Tab>
+</Tabs>
+
+### Save endpoint
+
+```http
+POST /member-info/edit-member-info/
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "user_email": "jane@example.com",
+  "about": "...",
+  "name": "Jane Doe",
+  "graduating_year": "2026",
+  "major": "Accounting & Information Systems",
+  "phone": "555-0100",
+  "member_status": "Looking for Internship",
+  "member_rank": "inducted"
+}
+```
+
+On success the parent `onSave` callback updates local `profileData` state, and a toast confirmation is shown. On failure the error detail from the response body is surfaced via `showToast`.
+
+## Event Panels
+
+`EventMember` renders three scrollable lists (max-height `400px` on `sm` screens, `600px` on mobile):
+
+<Accordion title="Events In-Session">
+  Filtered by `isEventInSession(event_date, event_time, event_hours)`. The helper computes `start` and `end = start + event_hours × 3600 seconds`; the event is in-session when `now ∈ [start, end]`. Each card shows `hideRSVP={true}` (RSVP is hidden during the session). A successful check-in calls `fetchEvents()` and `onRefreshUserDetails?.()` to refresh both the event list and the hours totals.
+</Accordion>
+
+<Accordion title="Upcoming Events">
+  All non-in-session events where `event_date/time >= now`, sorted ascending by date. Renders `EventCard` with full RSVP and check-in buttons (subject to alumni restrictions).
+</Accordion>
+
+<Accordion title="Attended Events">
+  Sourced from `eventAttendance` prop (the `event_attendance` array from `POST /member-info/`). Items are sorted descending by `event_date` (most recent first). Each item is adapted to the `Event` shape before passing to `EventCard`:
+
+  ```typescript
+  const eventForCard: Event = {
+    id: attendedEvent.event_id?.toString() || index.toString(),
+    event_name: attendedEvent.event_name || 'Event',
+    user_rsvped: false,
+    user_attended: true,  // always true
+    can_check_in: false,
+    event_lat: null,
+    event_long: null,
+    rsvp_count: 0,
+    attending_count: 0,
+    // ...remaining fields from attendedEvent
+  };
+  ```
+</Accordion>
+
+## Announcements Bell
+
+The bell icon (from `lucide-react`) in the top-right of the profile column is only visible to non-alumni. It tracks unread count using `localStorage` under the key `readAnnouncementIds`.
+
+```typescript
+// Storage helpers inside MemberDescription
+const READ_ANNOUNCEMENTS_KEY = "readAnnouncementIds";
+
+const getReadAnnouncementIdsFromStorage = (): string[] => { /* ... */ };
+const addAnnouncementsToReadStorage = (idsToAdd: string[]) => { /* ... */ };
+```
+
+Opening the modal calls `addAnnouncementsToReadStorage(allFetchedAnnouncementIds)` to mark all currently fetched announcements as read, then recalculates the badge count. The badge caps display at `9+` if there are more than nine unread items.
+
+Announcements are fetched from:
+
+```http
+GET /announcements
+Authorization: Bearer <access_token>
+```
+
+The response is passed directly to `MemberAnnouncementsListModal`.
+
+## Slack Shortcut
+
+A second icon button next to the bell opens `https://beta-alpha-psi-space.slack.com/` in a new tab. Like the bell, it is hidden for alumni.
+
+## Alumni Restrictions Summary
+
+```typescript
+import { isAlumni, canAccessFeature } from "../../utils/permissions";
+
+// isAlumni("alumni")      → true
+// isAlumni("inducted")    → false
+// isAlumni("pledge")      → false
+
+// canAccessFeature("alumni", "announcements") → false
+// canAccessFeature("alumni", "slack-access")  → false
+// canAccessFeature("inducted", "event-rsvp")  → true
+```
+
+When `isAlumni(rank)` returns `true`:
+- Hours section is removed
+- Announcements bell is removed
+- Slack button is removed
+- `EventCard` hides the RSVP and Check-In buttons (handled in `EventCard` itself via the same `isAlumniUser` flag)
+
+## Extending the Dashboard
+
+<Tip>
+  To add a new profile field, update the `userDetails` state shape in `MemberView`, add it to the `POST /member-info/edit-member-info/` payload in `ProfileEditModal.handleSubmit`, and render it in `MemberDescription`. All three files must change in sync.
+</Tip>
+
+To add a new hours category:
+1. Add the backend key to the `userDetails` state object in `MemberView`.
+2. Pass it as a new prop from `MemberView → MemberDescription`.
+3. Add a corresponding entry to the `MemberDetail` type in `types/index.ts`.
+4. Render it alongside the existing hour rows in `MemberDescription`.

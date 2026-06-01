@@ -1,0 +1,210 @@
+---
+title: "Resources: Categorised Files & Fuzzy Search"
+sidebarTitle: "Resources"
+description: "Member-accessible resource library organised into Chapter and Firm categories with Fuse.js fuzzy search, accordion expand/collapse, and signed-URL file previews."
+---
+
+The Resources page (`/resources`) presents the chapter's document and file library to authenticated non-sponsor members. Resources are grouped into categories with a `resourceType` of either `"chapter"` (internal chapter materials) or `"firm"` (recruiting and employer resources). A Fuse.js powered search bar filters across category names, descriptions, and the individual resource names and descriptions. Sponsors are silently redirected away from this page on mount.
+
+## Access Control
+
+On mount, `ResourcesPage` inspects the `role` from `useAuth()`. If the role is `"sponsor"` (checked both as a string and as an object with `type === "sponsor"`), the component calls `window.history.back()` or navigates to `/auth/Home`. The component also returns `null` during the redirect to prevent any flash of content.
+
+```typescript
+useEffect(() => {
+  if (role === "sponsor" || role?.type === "sponsor") {
+    window.history.length > 1
+      ? window.history.back()
+      : navigate("/auth/Home", { replace: true });
+  }
+}, [role, navigate]);
+```
+
+<Note>
+  Alumni members **can** access the Resources page. The only restriction is on sponsors. If you need to block alumni from a future resource category, add a `canAccessFeature` check from `utils/permissions.ts`.
+</Note>
+
+## Data Model
+
+### Category
+
+```typescript
+interface Category {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  resources: Resource[];
+  resourceType: "firm" | "chapter";  // mapped from backend resource_type
+}
+```
+
+The backend returns `resource_type: "firm" | "chapter" | null`. Null values default to `"firm"`:
+
+```typescript
+const mappedData = data.map((cat) => ({
+  ...cat,
+  resourceType: cat.resource_type || "firm",
+  resources: cat.resources || [],
+  created_at: new Date().toISOString(),  // placeholder; not in backend response
+}));
+```
+
+### Resource
+
+```typescript
+interface Resource {
+  id: string;
+  category_id: string;
+  name: string;
+  description: string;
+  file_key: string;       // Storage key on the backend
+  mime_type: string;      // e.g. "application/pdf", "image/png"
+  created_at: string;
+  signed_url: string | null;  // Pre-signed download/view URL; null if unavailable
+}
+```
+
+## Fetching Resources
+
+```http
+GET /resources
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+The request fires inside `useEffect` keyed on `session`. If `session.access_token` is absent, the effect returns early without fetching. Loading and error states are tracked with `loading` and `error` booleans.
+
+## Fuzzy Search
+
+Fuse.js is configured with a `0.4` threshold (more permissive than the network directory) and searches across both category-level and resource-level fields:
+
+```typescript
+const fuseOptions = {
+  includeScore: true,
+  threshold: 0.4,
+  keys: [
+    { name: "name",                 weight: 0.7 },  // category name
+    { name: "description",          weight: 0.3 },  // category description
+    { name: "resourceType",         weight: 0.2 },
+    { name: "resources.name",       weight: 0.7 },  // resource name (nested)
+    { name: "resources.description",weight: 0.5 },  // resource description (nested)
+  ],
+};
+
+const fuse = useMemo(() => new Fuse(categories, fuseOptions), [categories]);
+
+const filteredCategories = useMemo(() => {
+  if (!searchQuery.trim()) return categories;
+  return fuse.search(searchQuery).map((result) => ({ ...result.item }));
+}, [searchQuery, categories, fuse]);
+```
+
+<Tip>
+  Fuse.js searches nested arrays with dot notation (`"resources.name"`). When a category matches on a resource-level key, the entire category object (including all its resources) is returned. There is no per-resource filtering — the category is shown or hidden as a unit.
+</Tip>
+
+## Auto-Expand on Search
+
+Categories are collapsed by default. When the search query is non-empty, all filtered categories are automatically expanded; when the query is cleared, all collapse:
+
+```typescript
+useEffect(() => {
+  if (searchQuery.trim()) {
+    setExpandedCategories(new Set(filteredCategories.map((cat) => cat.id)));
+  } else {
+    setExpandedCategories(new Set());
+  }
+}, [searchQuery, filteredCategories]);
+```
+
+Manual accordion toggles are also available and update `expandedCategories` by adding or removing the category `id` from the `Set`.
+
+## Page Layout
+
+After filtering, categories are split by `resourceType` and rendered in two labelled sections:
+
+```
+Chapter Resources   ← filteredChapterCategories (resourceType === "chapter")
+──────────────────
+Firm Resources      ← filteredFirmCategories (resourceType === "firm")
+```
+
+Each section is only rendered if it has at least one category. If both are empty, a centred "No resources available at this time." message is shown.
+
+## ResourceCategory Component
+
+`ResourceCategory` renders a single accordion. The header row shows:
+- Category name and description
+- Resource count badge (e.g. `3 resources`)
+- Chevron icon (up/down)
+
+The component accepts an optional `expanded` prop for controlled mode (used by the page) or falls back to internal `useState` for standalone use:
+
+```typescript
+interface ResourceCategoryProps {
+  category: Category;
+  expanded?: boolean;     // controlled from parent
+  onToggle?: () => void;  // controlled toggle handler
+}
+```
+
+When expanded, resources are listed as rows with:
+- A file-type icon (PDF → `FileText`, image → `Image`, other → `File`)
+- Resource name and description
+- "Added" date (formatted with `toLocaleDateString`)
+- A preview eye button
+
+### File Type Icons
+
+```typescript
+const getResourceIcon = (mimeType: string) => {
+  if (mimeType.startsWith("image/")) return <Image ... />;
+  if (mimeType.includes("pdf"))      return <FileText ... />;
+  return <File ... />;
+};
+```
+
+## Resource Preview
+
+Clicking the eye icon opens `ResourcePreviewModal` with the selected resource. The button is disabled and styled `opacity-50 cursor-not-allowed` when `resource.signed_url` is `null`.
+
+```typescript
+<button
+  onClick={() => handleOpenPreviewModal(resource)}
+  disabled={!resource.signed_url}
+  title={!resource.signed_url ? "Preview unavailable" : "Preview Resource"}
+>
+  <Eye size={18} />
+</button>
+```
+
+`ResourcePreviewModal` consumes `signed_url` directly — the signed URL is returned by the backend and is time-limited. If a URL has expired, the preview will fail; page refresh fetches fresh signed URLs.
+
+## Error and Loading States
+
+| State | UI |
+|---|---|
+| `loading === true` | `<LoadingSpinner text="Loading resources..." size="lg" />` centred in main |
+| `error !== null` | Red alert box with the error string |
+| No results after search | "No resources available at this time." centred paragraph |
+| Sponsor role | Component returns `null`; redirect fires in `useEffect` |
+
+## Extending Resources
+
+<Accordion title="Adding a new resource type">
+  The `resourceType` discriminator is currently `"firm" | "chapter"`. To add a third section (e.g., `"external"`):
+
+  1. Update the `RawCategoryData.resource_type` union type in `ResourcesPage`.
+  2. Add `"external"` to the `Category.resourceType` type.
+  3. Add a `filteredExternalCategories` filter and a new `<>` section in the JSX below the Firm Resources section.
+  4. Update the backend to return `resource_type: "external"` for the new categories.
+</Accordion>
+
+<Accordion title="Changing the Fuse.js threshold">
+  The current `threshold: 0.4` is more lenient than the network directory's `0.3`. A lower threshold (closer to 0) returns only exact matches; a higher threshold (closer to 1) allows very fuzzy matches. Adjust `fuseOptions.threshold` in `ResourcesPage` to tune relevance.
+</Accordion>
+
+<Accordion title="Per-resource filtering">
+  The current implementation filters at the category level — if any resource within a category matches, the whole category is returned. To filter at the resource level, run a second Fuse pass inside the `filteredCategories.map` step to filter `category.resources` and return only matching resources.
+</Accordion>

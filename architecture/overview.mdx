@@ -1,0 +1,263 @@
+---
+title: "BAP Beta Tau Frontend Architecture Overview"
+sidebarTitle: "Overview"
+description: "A detailed look at the full dependency stack, the src/ directory organization, and the conventions that govern how pages, components, and context are structured."
+---
+
+The BAP Beta Tau frontend is a single-page application assembled from a deliberate, narrow dependency tree. React 19 provides the component model; Vite 6 handles bundling and the development server; Tailwind CSS 3 manages styling through utility classes and a small set of brand-specific design tokens; and Supabase JS 2 owns all authentication concerns. The backend is a completely separate service — the frontend is a pure consumer of its REST API, communicating over standard HTTP with Axios and the browser's native `fetch`. Understanding how these layers fit together — and how the `src/` directory reflects that layering — is the prerequisite for contributing to the codebase effectively.
+
+## Full Dependency Reference
+
+### Runtime Dependencies
+
+```json
+{
+  "@supabase/supabase-js": "^2.49.3",
+  "@tinymce/tinymce-react": "^6.3.0",
+  "@vercel/blob": "^1.1.1",
+  "axios": "^1.8.4",
+  "date-fns": "^4.1.0",
+  "fuse.js": "^7.1.0",
+  "leaflet": "^1.9.4",
+  "leaflet-geosearch": "^4.2.0",
+  "lucide-react": "^0.479.0",
+  "react": "^19.0.0",
+  "react-dom": "^19.0.0",
+  "react-hot-toast": "^2.5.2",
+  "react-icons": "^5.5.0",
+  "react-leaflet": "^5.0.0",
+  "react-leaflet-geosearch": "^0.3.4",
+  "react-router-dom": "^7.5.2"
+}
+```
+
+### Dev Dependencies
+
+```json
+{
+  "@eslint/js": "^9.21.0",
+  "@tailwindcss/postcss": "^4.0.15",
+  "@tailwindcss/typography": "^0.5.19",
+  "@types/leaflet": "^1.9.17",
+  "@types/react": "^19.0.10",
+  "@types/react-dom": "^19.0.4",
+  "@vitejs/plugin-react": "^4.3.4",
+  "autoprefixer": "^10.4.21",
+  "eslint": "^9.21.0",
+  "eslint-plugin-react-hooks": "^5.1.0",
+  "eslint-plugin-react-refresh": "^0.4.19",
+  "postcss": "^8.5.3",
+  "tailwind-scrollbar": "^4.0.2",
+  "tailwindcss": "^3.4.17",
+  "typescript": "~5.7.2",
+  "typescript-eslint": "^8.24.1",
+  "vite": "^6.2.0"
+}
+```
+
+### Key Library Roles
+
+<CardGroup cols={2}>
+  <Card title="React Router DOM v7" icon="route">
+    Provides `BrowserRouter`, `Routes`, `Route`, `Navigate`, `Outlet`, and `useLocation`. All routing — including the `ProtectedRoute` wrapper — is declared in `App.tsx`.
+  </Card>
+  <Card title="Supabase JS v2" icon="database">
+    Used exclusively for auth: `createClient`, `getSession`, `onAuthStateChange`, and the Google OAuth flow. No direct database queries are made from the frontend.
+  </Card>
+  <Card title="Axios v1" icon="arrows-left-right">
+    Used for REST API calls to the backend wherever a richer request/response API (interceptors, defaults) is preferred over native `fetch`. Auth header injection happens at the call site.
+  </Card>
+  <Card title="Fuse.js v7" icon="magnifying-glass">
+    Client-side fuzzy search for the networking directory pages (`/network`, `/alumni`, `/eboard-network`). Search indexes are built from the API response arrays.
+  </Card>
+  <Card title="Leaflet + react-leaflet" icon="map">
+    Interactive map component used in the event creation/editing modal (`LocationPicker.tsx`) to select and display event venues via geocoding.
+  </Card>
+  <Card title="TinyMCE React v6" icon="pen-to-square">
+    Rich-text editor embedded in admin modals for authoring announcements with formatted content. Requires a TinyMCE Cloud API key at runtime.
+  </Card>
+  <Card title="date-fns v4" icon="calendar">
+    Lightweight date formatting library used throughout event display components. Avoids pulling in the heavier `moment.js` or `dayjs`.
+  </Card>
+  <Card title="@vercel/blob v1" icon="cloud">
+    Used for uploading member profile pictures and sponsor/resource files to Vercel Blob storage without a dedicated file server.
+  </Card>
+</CardGroup>
+
+## Tailwind Design System
+
+The Tailwind config in `tailwind.config.js` extends the default theme with BAP-specific brand colors and fonts. All components use these tokens via utility classes rather than inline styles.
+
+```javascript
+// tailwind.config.js
+theme: {
+  extend: {
+    colors: {
+      bapgray:    "#818181",  // Secondary text, borders
+      bapred:     "#AF272F",  // Primary brand red
+      bapreddark: "#921F26",  // Hover / pressed state for red
+      bapredsat:  "#D12F39",  // Saturated accent red
+      baptan:     "#C5C19D",  // Background accents, cards
+    },
+    fontFamily: {
+      outfit:     ["Outfit",     "sans-serif"],  // Primary body font
+      montserrat: ["Montserrat", "sans-serif"],  // Secondary headings
+    },
+  },
+},
+plugins: [
+  require("tailwind-scrollbar"),          // Custom scrollbar styling
+  require("@tailwindcss/typography"),     // Prose classes for rich text
+],
+```
+
+Both fonts (Outfit and Montserrat) are loaded from Google Fonts in `index.html` with weights 300, 400, 500, 600, and 700. The root `<div>` in `App.tsx` applies `className="font-outfit"`, making Outfit the default font across all pages.
+
+## Application Entry Point
+
+The app boots in `src/main.tsx`, which mounts the `App` component into the `#root` div. `App.tsx` is the single source of truth for the provider hierarchy and all route declarations.
+
+The provider wrapping order in `App.tsx` is significant:
+
+```tsx
+// src/App.tsx — provider hierarchy
+<AuthProvider>              {/* Auth state, session, role */}
+  <ToastContext.Provider>   {/* Global toast notifications */}
+    <Router>                {/* BrowserRouter — must be inside providers */}
+      <Routes>...</Routes>
+    </Router>
+  </ToastContext.Provider>
+</AuthProvider>
+```
+
+`AuthProvider` wraps everything because both the router and components need access to auth state. `ToastContext.Provider` wraps the `Router` so page components can trigger toasts from route transitions.
+
+## The `src/` Directory in Detail
+
+### `pages/`
+
+Each subdirectory maps directly to one or more routes. Page components are thin — they compose domain-specific components from `components/` and wire up data fetching. They do not contain reusable logic.
+
+| Directory | Route(s) | Notes |
+|---|---|---|
+| `homepage/` | `/`, `/auth/Home` | `HomePage` is public; `AuthHome` is the post-login landing page |
+| `about/` | `/about` | Static content page |
+| `admin/` | `/admin` | E-board only; contains the full admin dashboard |
+| `contact-us/` | `/contact-us` | Public contact form |
+| `eboard-faculty/` | `/eboard-faculty` | Public page listing officers and faculty advisors |
+| `events/` | `/events`, `/events/:eventId` | Public list; detail view is protected |
+| `login/` | `/login` | Google OAuth entry point |
+| `member/` | `/member` | General-member dashboard |
+| `membership/` | `/membership` | Public membership process flow |
+| `network/` | `/network`, `/alumni`, `/eboard-network` | Member directory pages |
+| `notfound/` | `*` | 404 catch-all |
+| `resources/` | `/resources` | Protected shared resource library |
+| `sponsor/` | `/sponsor` | Sponsor portal dashboard |
+| `sponsors/` | `/sponsors` | Public sponsors showcase page |
+| `sponsors-network/` | `/sponsors-network` | Protected sponsors directory for members |
+
+### `components/`
+
+Components are organized by domain, not by type. A "card" component for events lives in `components/event/`, not in a global `components/cards/` directory.
+
+<Accordion title="components/admin/">
+  The largest component subdirectory. Contains all modals and management panels rendered inside the `/admin` page:
+
+  - `Sidebar.tsx` — Admin navigation sidebar
+  - `AdminMembersSection.tsx`, `AdminEventsSection.tsx`, `AdminAnnouncementsSection.tsx`, `AdminSponsorsSection.tsx`, `AdminUsersSection.tsx` — Tabbed management panels
+  - `CreateEventModal.tsx`, `EditEventModal.tsx` — Event CRUD modals (embed `LocationPicker` and TinyMCE)
+  - `CreateAnnouncementModal.tsx`, `EditAnnouncementModal.tsx`, `ViewAnnouncementModal.tsx`
+  - `AddUserModal.tsx`, `AddSponsorModal.tsx`
+  - `AdminMemberEditModal.tsx`, `EboardModal.tsx`, `EboardManagement.tsx`
+  - `AlumniMembersList.tsx`, `ArchivedMembersList.tsx`
+  - `ArchiveConfirmDialog.tsx`, `RestoreConfirmDialog.tsx`, `DeleteConfirmation.tsx`
+  - `ResourceManagement.tsx`, `ResourceModal.tsx`, `CategoryModal.tsx`
+  - `EmailList.tsx`, `SponsorList.tsx`
+</Accordion>
+
+<Accordion title="components/event/">
+  Components for displaying and interacting with events:
+
+  - `EventCard.tsx` — Summary card used in the public events listing
+  - `EventRSVP.tsx`, `EventRSVPsModal.tsx` — RSVP button and admin modal showing RSVP list
+  - `EventCheckIn.tsx` — QR/token-based check-in component
+  - `EventAttendeesModal.tsx` — Admin view of attendees
+  - `EventListShort.tsx` — Compact event list for the authenticated home dashboard
+  - `CalendarSubscribeButton.tsx` — ICS calendar subscription link
+</Accordion>
+
+<Accordion title="components/network/">
+  Components powering the three networking directory pages:
+
+  - `NetworkingLayout.tsx` — Shared layout wrapper for Members, Alumni, and Eboard pages
+  - `NetworkList.tsx` — Renders the grid of member profile cards
+  - `NetworkSearch.tsx` — Fuse.js-powered fuzzy search bar
+  - `NetworkProfileModal.tsx` — Full-screen profile modal on card click
+</Accordion>
+
+<Accordion title="components/common/">
+  Truly reusable, domain-agnostic UI primitives:
+
+  - `LoadingSpinner.tsx` — Configurable spinner with `text` and `size` props
+  - `SearchInput.tsx` — Styled search text input
+  - `SortDropdown.tsx` — Dropdown for sort order selection
+  - `ConfirmDialog.tsx`, `ConfirmationModal.tsx` — Generic confirmation modals
+  - `LocationPicker.tsx` — Leaflet map component for geocoding event locations
+  - `ProfilePictureUpload.tsx` — Handles Vercel Blob uploads for profile images
+  - `SponsorMultiSelect.tsx` — Multi-select for associating sponsors with events
+</Accordion>
+
+<Accordion title="components/layout/">
+  App-wide layout shells:
+
+  - `Navbar.tsx` — Responsive top navigation bar. Reads `isAuthenticated` from `useAuth()` and calls `getNavLinks(isLoggedIn)` to render the correct link set.
+  - `Footer.tsx` — Site-wide footer with chapter contact info and social links.
+</Accordion>
+
+### `context/`
+
+Two React contexts:
+
+- **`auth/authProvider.tsx`** — Exports `AuthProvider`, `useAuth()`, and the `RoleType` type. Manages session, role, loading state, and auth errors. See the [Authentication](/architecture/authentication) page for full details.
+- **`auth/supabaseClient.ts`** — Instantiates and exports the single Supabase client using `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Session is persisted to `localStorage`.
+- **`toast/ToastContext.tsx`** — Exports `ToastContext` with a `showToast(message, type, duration)` function. The `Toast.tsx` UI component in `components/ui/` consumes this context.
+
+### `utils/`
+
+```typescript
+// src/utils/permissions.ts
+export type PermissionFeature =
+  | 'event-rsvp'
+  | 'event-checkin'
+  | 'announcements'
+  | 'slack-access';
+
+// Checks feature access by member rank (pledge | inducted | alumni)
+export const canAccessFeature = (rank: string | undefined, feature: PermissionFeature): boolean => { ... };
+
+// True when rank === "alumni" (case-insensitive)
+export const isAlumni = (rank: string | undefined): boolean => { ... };
+```
+
+`canAccessFeature` enforces rank-based restrictions within the general-member experience. Alumni members (`rank === "alumni"`) are blocked from `event-rsvp`, `event-checkin`, `announcements`, and `slack-access`. All other ranks are allowed by default.
+
+### `services/`
+
+Currently contains `memberArchiveService.ts`, which encapsulates the API calls for archiving and restoring member records. As the app grows, new service files should follow this pattern: one file per backend resource domain, exporting typed async functions.
+
+### `types/`
+
+`src/types/index.ts` is the single shared type definition file. All TypeScript interfaces and type aliases for API response shapes (members, events, announcements, sponsors, resources) live here, keeping page and component files free of inline type declarations.
+
+## Vercel Deployment Configuration
+
+```json
+// vercel.json
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+```
+
+This single rewrite rule makes Vercel serve `index.html` for all paths, which is required for a React Router SPA. Without it, navigating directly to `/network` would return a 404 from Vercel's CDN instead of letting the client-side router handle the path.

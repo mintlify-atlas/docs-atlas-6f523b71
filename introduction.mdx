@@ -1,0 +1,119 @@
+---
+title: "Beta Alpha Psi Beta Tau Chapter Web Platform"
+sidebarTitle: "Introduction"
+description: "An overview of the BAP Beta Tau web platform — a React 19, TypeScript, Vite, and Supabase application for chapter members, sponsors, and e-board."
+---
+
+The Beta Alpha Psi Beta Tau Chapter web platform is a full-stack, member-facing application built to serve three distinct audiences: active chapter members, executive board officers, and corporate sponsors. It provides authenticated dashboards, a chapter-wide networking directory, event management with RSVP and check-in flows, an announcement system, a shared resource library, and an administrative control panel — all unified under a single React SPA deployed to Vercel. The frontend communicates with a separate backend API (referenced via `VITE_BACKEND_URL`) that owns the database and business logic, while Supabase handles identity via Google OAuth and session persistence in `localStorage`.
+
+## Who This Documentation Is For
+
+<CardGroup cols={2}>
+  <Card title="Chapter Developers" icon="code">
+    Engineers contributing to the platform who need to understand the project structure, auth system, routing conventions, and how to spin up a local environment.
+  </Card>
+  <Card title="E-Board Officers" icon="users">
+    Technical officers who need to understand how roles, permissions, and protected routes work — and what the admin dashboard can and cannot do without a backend change.
+  </Card>
+  <Card title="New Contributors" icon="rocket">
+    Anyone onboarding to the codebase for the first time. Start with the local setup guide, then read the architecture overview.
+  </Card>
+  <Card title="Sponsor Contacts" icon="building">
+    Technical stakeholders at sponsor companies who want to understand how sponsor accounts are provisioned and what the sponsor portal exposes.
+  </Card>
+</CardGroup>
+
+## Tech Stack at a Glance
+
+| Layer | Technology | Version |
+|---|---|---|
+| UI Framework | React | 19.0 |
+| Language | TypeScript | ~5.7.2 |
+| Build Tool | Vite | 6.2 |
+| Styling | Tailwind CSS | 3.4 |
+| Routing | React Router DOM | 7.5 |
+| Auth & DB Client | Supabase JS | 2.49 |
+| HTTP Client | Axios | 1.8 |
+| Maps | Leaflet + react-leaflet | 1.9 / 5.0 |
+| Rich Text | TinyMCE React | 6.3 |
+| Fuzzy Search | Fuse.js | 7.1 |
+| Icons | Lucide React + react-icons | 0.479 / 5.5 |
+| Toasts | react-hot-toast | 2.5 |
+| Hosting | Vercel | — |
+
+## Project Folder Structure
+
+The frontend lives entirely inside `Frontend/` within the monorepo. The `src/` directory follows a feature-aware layout where pages own their top-level view components and `components/` is further split by domain.
+
+```
+Frontend/
+├── index.html                  # Entry HTML — loads Outfit & Montserrat fonts
+├── vite.config.ts              # Vite config with @vitejs/plugin-react
+├── tailwind.config.js          # Custom colors, fonts, and plugins
+├── vercel.json                 # SPA rewrite rule (/* → /index.html)
+├── package.json
+└── src/
+    ├── main.tsx                # ReactDOM.createRoot entry point
+    ├── App.tsx                 # Root router, AuthProvider, ToastContext
+    ├── App.css
+    ├── vite-env.d.ts
+    ├── assets/                 # Static assets (logos, images)
+    ├── pages/                  # One directory per route
+    │   ├── homepage/           # HomePage.tsx, AuthHome.tsx
+    │   ├── about/
+    │   ├── admin/
+    │   ├── contact-us/
+    │   ├── eboard-faculty/
+    │   ├── events/             # EventsPage.tsx, ViewEvent.tsx
+    │   ├── login/
+    │   ├── member/
+    │   ├── membership/
+    │   ├── network/            # NetworkingPage, AlumniPage, EboardPage
+    │   ├── notfound/
+    │   ├── resources/
+    │   ├── sponsor/
+    │   ├── sponsors/
+    │   └── sponsors-network/
+    ├── components/             # Reusable UI — split by domain
+    │   ├── admin/              # Modals, sidebar, management panels
+    │   ├── announcement/
+    │   ├── auth/               # GoogleLogin, SponsorAuth
+    │   ├── common/             # LoadingSpinner, SearchInput, SortDropdown, etc.
+    │   ├── event/              # EventCard, EventRSVP, EventCheckIn, etc.
+    │   ├── Hero/
+    │   ├── layout/             # Navbar, Footer
+    │   ├── logOut/
+    │   ├── member/
+    │   ├── nav/                # NavLink.ts — nav link definitions
+    │   ├── network/            # NetworkList, NetworkSearch, NetworkProfileModal
+    │   ├── protectedRoute/     # ProtectedRoute.tsx
+    │   ├── resource/
+    │   ├── sponsor/
+    │   └── ui/                 # Toast, Modal, SponsorCard, ProcessStep, etc.
+    ├── context/
+    │   ├── auth/               # authProvider.tsx, supabaseClient.ts
+    │   └── toast/              # ToastContext.tsx
+    ├── hooks/
+    │   └── useScrollLock.ts
+    ├── services/
+    │   └── memberArchiveService.ts
+    ├── types/
+    │   └── index.ts
+    └── utils/
+        ├── permissions.ts      # canAccessFeature(), isAlumni()
+        └── sortUtils.ts
+```
+
+## Quick Navigation
+
+<CardGroup cols={3}>
+  <Card title="Local Setup" icon="laptop" href="/getting-started/local-setup">
+    Clone the repo, install dependencies, configure your `.env`, and start the dev server in minutes.
+  </Card>
+  <Card title="Environment Variables" icon="key" href="/getting-started/environment-variables">
+    Every environment variable the frontend needs, where to find the values, and what happens if one is missing.
+  </Card>
+  <Card title="Architecture Overview" icon="layer-group" href="/architecture/overview">
+    Deep-dive into the full dependency list, the `src/` directory conventions, and how the app is wired together at a high level.
+  </Card>
+</CardGroup>

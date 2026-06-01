@@ -1,0 +1,330 @@
+---
+title: "Network Directory: Members, Alumni & Eboard"
+sidebarTitle: "Network Directory"
+description: "Three interconnected directory pages — active members, alumni, and the executive board — powered by Fuse.js fuzzy search, dropdown filters, and a shared NetworkList grid."
+---
+
+The Network Directory is a family of three protected pages that share the same UI infrastructure: `NetworkSearch` for filtering/sorting, `NetworkList` for the card grid, and `NetworkProfileModal` for the full-profile drawer. Each page calls a different backend endpoint, normalises the response into the `MemberDetail` shape, and passes the result to the shared components. All three pages live under `NetworkingLayout`, which mounts the authenticated `Navbar` and `Footer`.
+
+<CardGroup cols={3}>
+  <Card title="/network" icon="users">
+    **NetworkingPage** — Active inducted and pledge members. Fetches `GET /member-info/active/summary`. Default sort: Total Hours (high → low).
+  </Card>
+  <Card title="/alumni" icon="graduation-cap">
+    **AlumniPage** — Alumni rank only. Fetches `GET /member-info/alumni/summary`. Default sort: Name (A→Z).
+  </Card>
+  <Card title="/eboard-network" icon="shield">
+    **EboardPage** — Current executive board. Fetches `GET /eboard` then cross-references `GET /member-info/active/summary` and `GET /member-info/alumni/summary` for enriched data. Default sort: Name (A→Z).
+  </Card>
+</CardGroup>
+
+## Shared MemberDetail Shape
+
+All three pages normalise backend responses to `MemberDetail` before handing off to `NetworkList`:
+
+```typescript
+interface MemberDetail {
+  id: string;
+  type: "member";
+  name: string;
+  email: string;          // display_email preferred over user_email
+  userEmail?: string;     // raw user_email kept for modal detail fetch
+  phone: string;
+  major: string;
+  graduationDate: string;
+  status: string;         // Employment status
+  about: string;
+  internship: string;
+  photoUrl: string;
+  hours: string;          // total_hours as string
+  developmentHours?: string;
+  professionalHours?: string;
+  serviceHours?: string;
+  socialHours?: string;
+  links?: string[];       // first_link from summary; full list loaded in modal
+  rank: string;           // "Inducted" | "Pledge" | "Alumni"
+  role: string;
+  event_attendance?: any[];
+}
+```
+
+<Note>
+  Summary endpoints return only `first_link`. The full `links` array is fetched lazily inside `NetworkProfileModal` when the modal opens.
+</Note>
+
+## Sub-Page Breakdown
+
+### NetworkingPage (`/network`)
+
+Fetches from `GET /member-info/active/summary`. The endpoint returns inducted **and** pledge members (alumni are excluded server-side). Rank values are normalised:
+
+```typescript
+const memberRank =
+  item.rank === "inducted" ? "Inducted" :
+  item.rank === "alumni"   ? "Alumni"   :
+  item.rank === "pledge"   ? "Pledge"   :
+  "Inducted"; // default for unknown values
+```
+
+Email precedence: `display_email ?? user_email ?? "Not Provided"`.
+
+Available **Status** filter options combine fixed rank labels with dynamic employment statuses:
+
+```typescript
+const availableStatuses = useMemo(() => {
+  const rankStatuses = ["Inducted", "Pledge"];
+  const memberStatuses = [...new Set(
+    members.map(m => m.status).filter(s => s && s !== "Not Specified")
+  )];
+  if (!memberStatuses.includes("Looking for Full-time")) {
+    memberStatuses.push("Looking for Full-time");
+  }
+  return [...rankStatuses, ...memberStatuses];
+}, [members]);
+```
+
+### AlumniPage (`/alumni`)
+
+Fetches from `GET /member-info/alumni/summary`. The Status filter shows only employment statuses (no rank labels, since all entries are already alumni). Rank sort options are absent from `alumniSortOptions`.
+
+### EboardPage (`/eboard-network`)
+
+Makes three parallel requests:
+
+```typescript
+const [eboardResponse, activeResponse, alumniResponse] = await Promise.all([
+  fetch(`${VITE_BACKEND_URL}/eboard`, { headers }),
+  fetch(`${VITE_BACKEND_URL}/member-info/active/summary`, { headers }),
+  fetch(`${VITE_BACKEND_URL}/member-info/alumni/summary`, { headers }),
+]);
+```
+
+The `GET /eboard` response returns `EboardFacultyEntry[]`:
+
+```typescript
+type EboardFacultyEntry = {
+  role: string;            // e.g. "President"
+  role_email: string;      // role-specific address
+  email: string;           // personal email (used as lookup key)
+  display_email?: string;
+  profile_photo_url?: string;
+  name: string | null;
+  major: string | null;
+  rank?: number;           // numeric rank within eboard ordering
+};
+```
+
+A `Map<string, BackendMemberSummary>` is built from the member summaries, keyed by `user_email`. Each eboard entry is merged with its matching summary (if found):
+
+```typescript
+const mapEboardEntryToMember = (
+  entry: EboardFacultyEntry,
+  index: number,
+  memberSummary?: BackendMemberSummary
+): MemberDetail => ({
+  id: `eboard-${index}-${entry.role}`,
+  type: "member",
+  name: entry.name || memberSummary?.name || entry.role || "Unknown Member",
+  // Email priority: display_email → role_email → email
+  email: entry.display_email || entry.role_email || entry.email || "Not Provided",
+  userEmail: entry.email || undefined,
+  major: memberSummary?.major || entry.major || "Not Provided",
+  about: memberSummary?.about || entry.role || "No description provided.",
+  photoUrl: entry.profile_photo_url || memberSummary?.profile_photo_url || "",
+  // ...remaining fields from memberSummary
+});
+```
+
+EboardPage has **no** graduation year, major, or status filters — the filter panel is empty (`availableGraduationYears: []`, etc.) and only fuzzy name/email/major/about search is available.
+
+## Fuse.js Configuration
+
+Each page instantiates a `Fuse` object via `useMemo` — it rebuilds only when `members` changes.
+
+<Tabs>
+  <Tab title="NetworkingPage & AlumniPage">
+    ```typescript
+    const fuseOptions = {
+      includeScore: true,
+      threshold: 0.3,       // Lower = stricter matching
+      keys: [
+        { name: "name",           weight: 0.8 },
+        { name: "about",          weight: 0.4 },
+        { name: "email",          weight: 0.6 },
+        { name: "major",          weight: 0.5 },
+        { name: "role",           weight: 0.5 },
+        { name: "graduationDate", weight: 0.3 },
+        { name: "hours",          weight: 0.2 },
+        { name: "links",          weight: 0.2 },
+      ],
+    };
+    const fuse = useMemo(() => new Fuse(members, fuseOptions), [members]);
+    ```
+  </Tab>
+  <Tab title="EboardPage">
+    ```typescript
+    const fuse = useMemo(() => new Fuse(members, {
+      includeScore: true,
+      threshold: 0.3,
+      keys: [
+        { name: "name",  weight: 0.8 },
+        { name: "email", weight: 0.6 },
+        { name: "major", weight: 0.5 },
+        { name: "about", weight: 0.4 },
+      ],
+    }), [members]);
+    ```
+  </Tab>
+</Tabs>
+
+Search is debounced by 300 ms inside `NetworkSearch` via `useEffect`. Fuzzy results are then passed through the hard filter clauses (graduation year, major, status).
+
+## Search & Filter Interface (`NetworkSearch`)
+
+`NetworkSearch` manages its own `query` and `filters` state and calls `onSearch(query, filters)` after a 300 ms debounce:
+
+```typescript
+useEffect(() => {
+  const delayDebounce = setTimeout(() => {
+    onSearch(query, filters);
+  }, 300);
+  return () => clearTimeout(delayDebounce);
+}, [query, filters, onSearch]);
+```
+
+**Filter logic** inside each page's `handleSearch`:
+
+```typescript
+const handleSearch = useCallback((query: string, filters: Filters) => {
+  // 1. Fuzzy search (if query non-empty)
+  let results = query.trim()
+    ? fuse.search(query).map(r => r.item)
+    : members;
+
+  // 2. Hard filters applied on top of fuzzy results
+  return results.filter((member) => {
+    const yearMatch   = !filters.graduationYear || member.graduationDate === filters.graduationYear;
+    const majorMatch  = !filters.major          || member.major === filters.major;
+    const statusMatch = !filters.status         || /* rank or employment status check */;
+    return yearMatch && majorMatch && statusMatch;
+  });
+}, [fuse, members]);
+```
+
+Status filtering matches against **rank** labels (`"Inducted"`, `"Pledge"`, `"Alumni"`) **or** employment status strings (`"Looking for Internship"`, `"Looking for Full-time"`, `"Not Looking"`), so a single dropdown handles both dimensions.
+
+## Sort Options
+
+Each page passes a `sortOptions` array to `NetworkSearch` and uses the `useSort` hook for the actual sort:
+
+```typescript
+const { sortBy, sortedData: sortedMembers, handleSortChange } = useSort(
+  filteredMembers,
+  'hours-desc',   // initial sort key
+  memberSortFields
+);
+```
+
+<Tabs>
+  <Tab title="NetworkingPage sort options">
+    | Value | Label |
+    |---|---|
+    | `name-asc` | Name (A-Z) |
+    | `name-desc` | Name (Z-A) |
+    | `graduation-asc` | Graduation Year (Earliest) |
+    | `graduation-desc` | Graduation Year (Latest) |
+    | `major-asc` | Major (A-Z) |
+    | `major-desc` | Major (Z-A) |
+    | `rank-asc` | Rank (Current First) |
+    | `rank-desc` | Rank (Alumni First) |
+    | `hours-desc` *(default)* | Total Hours (High to Low) |
+    | `hours-asc` | Total Hours (Low to High) |
+    | `email-asc` | Email (A-Z) |
+    | `email-desc` | Email (Z-A) |
+  </Tab>
+  <Tab title="AlumniPage sort options">
+    Same as NetworkingPage minus `rank-asc` and `rank-desc` (all entries are alumni). Default: `name-asc`.
+  </Tab>
+  <Tab title="EboardPage sort options">
+    | Value | Label |
+    |---|---|
+    | `name-asc` *(default)* | Name (A-Z) |
+    | `name-desc` | Name (Z-A) |
+    | `major-asc` | Major (A-Z) |
+    | `major-desc` | Major (Z-A) |
+    | `email-asc` | Email (A-Z) |
+    | `email-desc` | Email (Z-A) |
+  </Tab>
+</Tabs>
+
+## NetworkList Component
+
+`NetworkList` renders a responsive CSS grid (1 column → 2 columns → 3 columns) of member cards. Each card shows:
+
+- Profile photo (or a coloured initial avatar if `photoUrl` is absent)
+- Name + major
+- Email (with `Mail` icon)
+- Total hours (hidden when `rank.toLowerCase() === "alumni"`)
+- First link (clickable, opens in new tab; `e.stopPropagation()` prevents modal from opening)
+- Major (with `Briefcase` icon)
+- About (2-line clamp with `Info` icon)
+- Graduation year (with `GraduationCap` icon)
+- Rank (with `Award` icon)
+- Employment status (with `Target` icon)
+
+A **View Profile** button at the bottom of each card opens `NetworkProfileModal`. Clicking anywhere on the card also opens the modal.
+
+```typescript
+interface NetworkListProps {
+  entities: (MemberDetail | Sponsor)[];
+}
+```
+
+<Note>
+  `NetworkList` can render both members and sponsors. The sponsor branch uses `SponsorProfileModal`. All three network pages pass only `MemberDetail` entries, so the sponsor branch is exercised elsewhere.
+</Note>
+
+## NetworkProfileModal
+
+`NetworkProfileModal` opens as a `Modal` (size `"lg"`). On open it checks if `developmentHours !== "0"` — if true the summary data is already detailed and no extra fetch is needed. Otherwise it fetches the full member profile:
+
+```http
+GET /member-info/<encoded_email>
+Authorization: Bearer <access_token>
+```
+
+The `email` used for the lookup prefers `member.userEmail` over `member.email` (which may be `display_email`):
+
+```typescript
+const memberLookupEmail = member.userEmail || member.email;
+```
+
+The modal merges the full response with the summary data already in `MemberDetail`:
+
+```typescript
+const fullData: MemberDetail = {
+  ...member,                                    // summary fields
+  phone: data.phone || "Not Provided",
+  internship: data.internship || "Not Specified",
+  developmentHours: data.development_hours?.toString() ?? "0",
+  professionalHours: data.professional_hours?.toString() ?? "0",
+  serviceHours: data.service_hours?.toString() ?? "0",
+  socialHours: data.social_hours?.toString() ?? "0",
+  links: Array.isArray(data.links) ? data.links : (member.links || []),
+  event_attendance: data.event_attendance || [],
+};
+```
+
+The displayed email is **always** from `member.email` (the display_email-preferred value from the list). Clicking the email copies it to the clipboard via `navigator.clipboard.writeText` and fires a success toast.
+
+## Extending the Directory
+
+<Tip>
+  To add a new filterable field (e.g., internship status), add a corresponding `availableX` `useMemo` in the page, pass it as a new prop to `NetworkSearch`, render a new `<select>` in `NetworkSearch`, and extend the `handleSearch` filter predicate in the page.
+</Tip>
+
+To add a new directory page (e.g., faculty):
+1. Create a new page component modelled on `EboardPage`.
+2. Fetch from your backend endpoint and transform to `MemberDetail[]`.
+3. Pass the array to `<NetworkList entities={...} />`.
+4. Add the route in the router and a nav link in `getNavLinks`.

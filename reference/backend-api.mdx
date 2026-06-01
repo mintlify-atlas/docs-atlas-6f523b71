@@ -1,0 +1,528 @@
+---
+title: "Backend API Reference: All Endpoints and Request Shapes"
+sidebarTitle: "Backend API"
+description: "Complete reference for every REST endpoint exposed by the BAP Beta Tau backend, grouped by resource, with auth requirements, request bodies, and response shapes."
+---
+
+The BAP Beta Tau backend is a REST API deployed at `https://asubap-backend.vercel.app`. All frontend requests read the base URL from the `VITE_BACKEND_URL` environment variable. Most endpoints require a Supabase-issued JWT passed as a `Bearer` token in the `Authorization` header — the token is available as `session.access_token` from the `useAuth()` hook.
+
+```typescript
+// Standard authenticated request pattern
+const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/some-endpoint`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.access_token}`,
+  },
+  body: JSON.stringify(payload),
+});
+```
+
+---
+
+## Users
+
+### `POST /users`
+
+Resolves a Supabase session to an application role. Called by `AuthProvider` immediately after any auth-state change.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="user_email" type="string" required>
+  The authenticated user's email address, sourced from `session.user.email`.
+</ParamField>
+
+**Response:** Role string or sponsor object
+
+<ResponseField name="(string)" type="string">
+  One of `"general-member"`, `"e-board"`, `"admin"`, `"pledge"`, `"alumni"` for regular users.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  `"sponsor"` — present when the user is a sponsor account.
+</ResponseField>
+
+<ResponseField name="companyName" type="string">
+  The sponsor's company name — present only when `type === "sponsor"`.
+</ResponseField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/users \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"user_email": "member@asu.edu"}'
+# Response: "general-member"
+
+curl -X POST https://asubap-backend.vercel.app/users \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"user_email": "company-name@example.com"}'
+# Response: {"type": "sponsor", "companyName": "Company Name"}
+```
+
+---
+
+### `GET /users/summary`
+
+Lists all registered users. Restricted to admin/e-board roles.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** Array of user summary objects
+
+<ResponseField name="email" type="string">The user's email address.</ResponseField>
+<ResponseField name="name" type="string">Display name.</ResponseField>
+<ResponseField name="role" type="string">Application role string.</ResponseField>
+<ResponseField name="rank" type="string">Member rank (e.g., `"inducted"`, `"pledge"`, `"alumni"`).</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/users/summary \
+  -H "Authorization: Bearer <token>"
+# Response: [{"email":"...","name":"...","role":"general-member","rank":"inducted"}]
+```
+
+---
+
+### `POST /users/delete-user`
+
+Permanently removes a user account. Restricted to admin/e-board roles.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="user_email" type="string" required>
+  Email address of the user to delete.
+</ParamField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/users/delete-user \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"user_email": "member@asu.edu"}'
+```
+
+---
+
+## Events
+
+### `GET /events`
+
+Returns the event list. The response shape differs based on the caller's role.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `MemberEvent[]` for members/sponsors, `AdminEvent[]` for e-board
+
+<Tabs>
+  <Tab title="MemberEvent fields">
+    <ResponseField name="id" type="string">Event identifier.</ResponseField>
+    <ResponseField name="event_name" type="string">Event title.</ResponseField>
+    <ResponseField name="event_description" type="string">Description text.</ResponseField>
+    <ResponseField name="event_location" type="string">Venue or location string.</ResponseField>
+    <ResponseField name="event_date" type="string">ISO date string (`YYYY-MM-DD`).</ResponseField>
+    <ResponseField name="event_time" type="string">Time string (`HH:MM:SS`).</ResponseField>
+    <ResponseField name="event_hours" type="number">Credit hours for attendance.</ResponseField>
+    <ResponseField name="event_hours_type" type="string">Hour category (e.g. `"professional"`, `"service"`).</ResponseField>
+    <ResponseField name="rsvp_count" type="number">Aggregate RSVP count.</ResponseField>
+    <ResponseField name="attending_count" type="number">Aggregate attendance count.</ResponseField>
+    <ResponseField name="user_rsvped" type="boolean">Whether the current user has RSVP'd.</ResponseField>
+    <ResponseField name="user_attended" type="boolean">Whether the current user attended.</ResponseField>
+    <ResponseField name="can_check_in" type="boolean">Whether check-in is currently available.</ResponseField>
+  </Tab>
+  <Tab title="AdminEvent additional fields">
+    <ResponseField name="event_lat" type="number">Check-in geofence latitude.</ResponseField>
+    <ResponseField name="event_long" type="number">Check-in geofence longitude.</ResponseField>
+    <ResponseField name="event_rsvped" type="string[]">Array of user IDs who RSVP'd.</ResponseField>
+    <ResponseField name="event_attending" type="string[]">Array of user IDs who attended.</ResponseField>
+    <ResponseField name="is_hidden" type="boolean">Whether event is hidden from non-admins.</ResponseField>
+    <ResponseField name="check_in_window" type="number">Minutes before/after event start that check-in is open.</ResponseField>
+    <ResponseField name="check_in_radius" type="number">Geofence radius in meters.</ResponseField>
+  </Tab>
+</Tabs>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/events \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `GET /events/:eventId/participants`
+
+Returns detailed RSVP and attendance lists with user emails. **E-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required, e-board role)
+
+**Path param:** `eventId` — the event's string identifier.
+
+**Response:** `EventParticipants`
+
+<ResponseField name="event_id" type="string">Event identifier.</ResponseField>
+<ResponseField name="event_name" type="string">Event name.</ResponseField>
+<ResponseField name="rsvped_users" type="array">
+  Array of `{user_id, name, user_email}` for users who RSVP'd.
+</ResponseField>
+<ResponseField name="attending_users" type="array">
+  Array of `{user_id, name, user_email, checked_in_at?}` for users who attended.
+</ResponseField>
+<ResponseField name="rsvp_count" type="number">Total RSVP count.</ResponseField>
+<ResponseField name="attending_count" type="number">Total attendance count.</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/events/42/participants \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /events/delete-event`
+
+Deletes an event. **E-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="event_id" type="string" required>
+  The ID of the event to delete.
+</ParamField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/events/delete-event \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"event_id": "42"}'
+```
+
+---
+
+## Announcements
+
+### `GET /announcements`
+
+Retrieves all announcements ordered by pin status and date.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `Announcement[]`
+
+<ResponseField name="id" type="string">Announcement identifier.</ResponseField>
+<ResponseField name="title" type="string">Announcement headline.</ResponseField>
+<ResponseField name="description" type="string">Body text.</ResponseField>
+<ResponseField name="created_at" type="string">ISO timestamp of creation.</ResponseField>
+<ResponseField name="is_pinned" type="boolean">Whether the announcement is pinned to the top.</ResponseField>
+<ResponseField name="target_audience" type="string">`"all"`, `"members"`, or `"pledges"`.</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/announcements \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /announcements/delete-announcement`
+
+Deletes an announcement by ID. **E-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="announcement_id" type="string" required>
+  The ID of the announcement to delete.
+</ParamField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/announcements/delete-announcement \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"announcement_id": "7"}'
+```
+
+---
+
+## Sponsors
+
+### `GET /sponsors/`
+
+Returns the full sponsor list with all details. **Authenticated users.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `ApiSponsor[]` — includes resources and email lists.
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/sponsors/ \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /sponsors/delete-sponsor`
+
+Removes a sponsor from the system. **Admin only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="sponsor_name" type="string" required>
+  The company name of the sponsor to delete.
+</ParamField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/sponsors/delete-sponsor \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"sponsor_name": "Acme Corp"}'
+```
+
+---
+
+### `POST /sponsors/change-sponsor-tier`
+
+Updates a sponsor's tier classification. **Admin only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+<ParamField body="sponsor_name" type="string" required>
+  The company name of the sponsor to update.
+</ParamField>
+
+<ParamField body="tier" type="string" required>
+  The new tier value (e.g., `"gold"`, `"silver"`, `"bronze"`).
+</ParamField>
+
+```bash
+curl -X POST https://asubap-backend.vercel.app/sponsors/change-sponsor-tier \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"sponsor_name": "Acme Corp", "tier": "gold"}'
+```
+
+---
+
+### `GET /sponsors/:name/details`
+
+Retrieves detailed profile information for a specific sponsor.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Path param:** `name` — URL-encoded company name.
+
+**Response:**
+
+<ResponseField name="company_name" type="string">The sponsor's display name.</ResponseField>
+<ResponseField name="about" type="string">Company description.</ResponseField>
+<ResponseField name="links" type="string[]">Array of URLs.</ResponseField>
+<ResponseField name="pfp_url" type="string">Profile photo URL (Vercel Blob).</ResponseField>
+
+```bash
+curl -X GET "https://asubap-backend.vercel.app/sponsors/Acme%20Corp/details" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /sponsors/:name/details`
+
+Updates a sponsor's about text and links.
+
+**Auth:** `Authorization: Bearer <token>` (required, sponsor role for own profile)
+
+**Path param:** `name` — the sponsor's company name.
+
+<ParamField body="about" type="string" required>
+  Updated company description (max 500 characters).
+</ParamField>
+
+<ParamField body="links" type="string[]" required>
+  Updated array of `https://` URLs. Send an empty array `[]` to clear all links.
+</ParamField>
+
+```bash
+curl -X POST "https://asubap-backend.vercel.app/sponsors/Acme%20Corp/details" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"about": "We build software.", "links": ["https://acme.com"]}'
+```
+
+---
+
+## Member Info
+
+### `GET /member-info/:email`
+
+Returns a member's full profile detail.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Path param:** `email` — the member's email address (URL-encoded).
+
+**Response:** `MemberDetail`
+
+<ResponseField name="id" type="string">Internal member identifier.</ResponseField>
+<ResponseField name="email" type="string">Member email.</ResponseField>
+<ResponseField name="name" type="string">Full display name.</ResponseField>
+<ResponseField name="phone" type="string">Phone number.</ResponseField>
+<ResponseField name="major" type="string">Academic major.</ResponseField>
+<ResponseField name="graduationDate" type="string">Expected graduation year/date.</ResponseField>
+<ResponseField name="status" type="string">Job-search status: `"Looking for Internship"`, `"Looking for Full-time"`, or `"Not Looking"`.</ResponseField>
+<ResponseField name="about" type="string">Member bio.</ResponseField>
+<ResponseField name="hours" type="string">Total event hours accumulated.</ResponseField>
+<ResponseField name="rank" type="string">`"Current"`, `"Pledge"`, or `"Alumni"`.</ResponseField>
+<ResponseField name="role" type="string">Application role string.</ResponseField>
+<ResponseField name="deleted_at" type="string | null">Timestamp of soft-deletion; `null` if active.</ResponseField>
+
+```bash
+curl -X GET "https://asubap-backend.vercel.app/member-info/member%40asu.edu" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /member-info/:email/archive`
+
+Soft-deletes a member (sets `deleted_at` timestamp). **Admin/e-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `ArchiveResponse`
+
+<ResponseField name="success" type="boolean">Whether the operation succeeded.</ResponseField>
+<ResponseField name="message" type="string">Human-readable result message.</ResponseField>
+
+```bash
+curl -X POST "https://asubap-backend.vercel.app/member-info/member%40asu.edu/archive" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `POST /member-info/:email/restore`
+
+Restores a previously archived member (clears `deleted_at`). **Admin/e-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `ArchiveResponse` — same shape as archive.
+
+```bash
+curl -X POST "https://asubap-backend.vercel.app/member-info/member%40asu.edu/restore" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### `GET /member-info/archived`
+
+Returns all currently archived (soft-deleted) members. **Admin/e-board only.**
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** `ArchivedMember[]`
+
+<ResponseField name="email" type="string">Member email.</ResponseField>
+<ResponseField name="name" type="string">Display name.</ResponseField>
+<ResponseField name="deleted_at" type="string">ISO timestamp of when the member was archived.</ResponseField>
+<ResponseField name="role" type="string">Application role at time of archival.</ResponseField>
+<ResponseField name="rank" type="string">Member rank (optional).</ResponseField>
+<ResponseField name="major" type="string">Academic major (optional).</ResponseField>
+<ResponseField name="graduating_year" type="number">Expected graduation year (optional).</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/member-info/archived \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## E-board
+
+### `GET /eboard`
+
+Returns the current e-board and faculty advisor roster.
+
+**Auth:** `Authorization: Bearer <token>` (optional — check backend policy)
+
+**Response:** `EboardFacultyEntry[]`
+
+<ResponseField name="role" type="string">Position title (e.g., `"President"`, `"Faculty Advisor"`).</ResponseField>
+<ResponseField name="role_email" type="string">Role-specific email address.</ResponseField>
+<ResponseField name="email" type="string">Personal email of the holder.</ResponseField>
+<ResponseField name="display_email" type="string">Publicly displayed email (optional).</ResponseField>
+<ResponseField name="profile_photo_url" type="string">Photo URL (optional).</ResponseField>
+<ResponseField name="name" type="string | null">Full name of the position holder.</ResponseField>
+<ResponseField name="major" type="string | null">Academic major (optional).</ResponseField>
+<ResponseField name="rank" type="number">Display order rank (optional).</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/eboard \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Resources
+
+### `GET /resources`
+
+Returns all sponsor resources grouped by company, with signed URLs for direct browser access.
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Response:** Categorized resource array
+
+<ResponseField name="category" type="string">Sponsor company name.</ResponseField>
+<ResponseField name="resources" type="array">
+  Array of resource objects.
+  <Expandable title="Resource object fields">
+    <ResponseField name="id" type="number">Database identifier.</ResponseField>
+    <ResponseField name="label" type="string">Human-readable resource name.</ResponseField>
+    <ResponseField name="signed_url" type="string">Time-limited Vercel Blob URL for direct access.</ResponseField>
+    <ResponseField name="mime_type" type="string">MIME type string (e.g., `"application/pdf"`).</ResponseField>
+    <ResponseField name="uploadDate" type="string">ISO date string of upload.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -X GET https://asubap-backend.vercel.app/resources \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Links
+
+### `GET /links`
+
+Returns dynamic URL values stored in the backend (used to avoid hardcoding URLs in the frontend).
+
+**Auth:** `Authorization: Bearer <token>` (required)
+
+**Query params:**
+
+<ParamField query="link_name" type="string" required>
+  The identifier for the desired link. Example: `forms`.
+</ParamField>
+
+**Response:** `[{ link: string }]` — an array with a single object containing the URL.
+
+```bash
+curl -X GET "https://asubap-backend.vercel.app/links?link_name=forms" \
+  -H "Authorization: Bearer <token>"
+# Response: [{"link": "https://docs.google.com/forms/..."}]
+```
+
+---
+
+## Error Handling
+
+All endpoints return standard HTTP status codes. Common error shapes:
+
+| Status | Meaning |
+|---|---|
+| `400` | Bad request — missing or invalid body parameters |
+| `401` | Unauthorized — missing or expired Bearer token |
+| `403` | Forbidden — valid token but insufficient role, or archived member |
+| `404` | Resource not found |
+| `500` | Internal server error |
+
+Error responses include a JSON body: `{ "error": "Human-readable message" }`.
+
+<Warning>
+  The `POST /users` endpoint returns `403` with `{ error: "Member is archived" }` when an archived member attempts to authenticate. `AuthProvider` propagates this as `authError` in the auth context without clearing the session — the `/auth/Home` page is responsible for displaying the error and signing the user out.
+</Warning>

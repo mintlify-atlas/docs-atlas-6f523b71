@@ -1,0 +1,237 @@
+---
+title: "Announcements: Pinned Feed & Unread Tracking"
+sidebarTitle: "Announcements"
+description: "Member-facing announcement system with pinned-first sorting, localStorage-based unread badge tracking, per-item detail modal, and inline search inside the modal."
+---
+
+Announcements surface to members through a bell icon on the Member Dashboard (`/member`). The feature is owned entirely by `MemberDescription` — announcements are fetched, tracked, and displayed from within that component, not from a standalone page. The system is intentionally lightweight: there is no dedicated `/announcements` route for members; the modal is the sole interface.
+
+Alumni members do not see announcements at all. The bell icon and its associated logic are gated by `isAlumni(rank)`.
+
+## Architecture
+
+```
+MemberDescription
+├── fetchAnnouncementsForBadgeAndModal()   ← GET /announcements on mount
+├── Bell button (non-alumni only)
+│   └── badge: unread count from localStorage
+├── handleOpenAnnouncementsModal()          ← marks all as read, opens modal
+└── MemberAnnouncementsListModal
+    ├── AnnouncementListShort               ← sorted list with inline search
+    └── ViewAnnouncementModal               ← full-content detail modal
+```
+
+## Fetching Announcements
+
+On mount, `MemberDescription` fetches all announcements the member is entitled to see:
+
+```http
+GET /announcements
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+The response is `Announcement[]`. The full array is stored in `allAnnouncementsData` and each announcement's `id` is extracted into `allFetchedAnnouncementIds` for badge calculation.
+
+## Announcement Type
+
+```typescript
+interface Announcement {
+  id: string;
+  title: string;
+  description: string;          // HTML string
+  created_at?: string;          // ISO timestamp
+  updated_at?: string;
+  is_pinned?: boolean;          // Pinned items float to top
+  target_audience?: "all" | "members" | "pledges";
+  date?: string;
+  announcement_date?: string | null;
+}
+```
+
+<Note>
+  The `description` field is an HTML string. `AnnouncementListShort` uses `DOMParser` to strip HTML tags for the list preview and search matching. The full HTML is rendered inside `ViewAnnouncementModal`.
+</Note>
+
+## Unread Badge Tracking
+
+The unread count is tracked client-side using `localStorage`. There is no server-side read state.
+
+### Storage key
+
+```typescript
+const READ_ANNOUNCEMENTS_KEY = "readAnnouncementIds";
+```
+
+The stored value is a JSON-serialised array of announcement ID strings.
+
+### Helpers
+
+```typescript
+// Read IDs from storage (returns [] on parse error)
+const getReadAnnouncementIdsFromStorage = (): string[] => {
+  const stored = localStorage.getItem(READ_ANNOUNCEMENTS_KEY);
+  try { return stored ? JSON.parse(stored) : []; }
+  catch (e) { return []; }
+};
+
+// Merge new IDs into existing set and persist
+const addAnnouncementsToReadStorage = (idsToAdd: string[]) => {
+  const currentReadIds = new Set(getReadAnnouncementIdsFromStorage());
+  idsToAdd.forEach((id) => currentReadIds.add(id));
+  localStorage.setItem(READ_ANNOUNCEMENTS_KEY, JSON.stringify([...currentReadIds]));
+};
+```
+
+### Badge calculation
+
+```typescript
+const calculateUnreadCount = useCallback(() => {
+  const readIds = new Set(getReadAnnouncementIdsFromStorage());
+  const unreadCount = allFetchedAnnouncementIds.filter(
+    (id) => !readIds.has(id)
+  ).length;
+  setAnnouncementBadgeCount(unreadCount);
+}, [allFetchedAnnouncementIds]);
+```
+
+`calculateUnreadCount` runs whenever `allFetchedAnnouncementIds` changes (i.e., after the fetch completes). It also runs after the modal is opened to immediately reflect the newly-read state.
+
+### Badge display
+
+The badge renders as a red circle overlaid on the bell icon:
+
+```
+{announcementBadgeCount > 0 && (
+  <span>
+    {announcementBadgeCount > 9 ? "9+" : announcementBadgeCount}
+  </span>
+)}
+```
+
+Counts above 9 are capped at `"9+"`.
+
+## Opening the Modal
+
+```typescript
+const handleOpenAnnouncementsModal = () => {
+  if (allFetchedAnnouncementIds.length > 0) {
+    // Mark all currently fetched announcements as read immediately
+    addAnnouncementsToReadStorage(allFetchedAnnouncementIds);
+  }
+  calculateUnreadCount();           // Badge drops to 0
+  setIsAnnouncementsListModalOpen(true);
+};
+```
+
+All fetched announcement IDs are written to `localStorage` as read the moment the user opens the modal — not when they scroll to or click an individual item. This is a deliberate design choice: opening the modal is treated as acknowledgement.
+
+## MemberAnnouncementsListModal
+
+The modal is rendered via `createPortal` into `document.body`, preventing z-index clipping issues with the page's own stacking contexts. It applies `useScrollLock` to disable background scroll while open.
+
+### Sorting
+
+On open, announcements are sorted with pinned items first, then by `created_at` descending:
+
+```typescript
+const newSortedAnnouncements = [...announcementsData].sort((a, b) => {
+  if (a.is_pinned && !b.is_pinned) return -1;
+  if (!a.is_pinned && b.is_pinned) return 1;
+
+  const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+  const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+  return dateB - dateA;  // most recent first
+});
+```
+
+### Loading state
+
+The modal shows `<LoadingSpinner>` when it is open but `announcementsData` is still an empty array (i.e., the fetch from `MemberDescription` has not yet completed):
+
+```typescript
+const isLoading = isOpen && announcementsData.length === 0 && sortedAnnouncements.length === 0;
+```
+
+### State reset
+
+On close (`!isOpen`), `sortedAnnouncements` is reset to `[]` so the next open starts with a fresh sort.
+
+## AnnouncementListShort
+
+`AnnouncementListShort` renders the scrollable list of announcement rows inside the modal. It has its own internal search state for filtering within the already-fetched list:
+
+```typescript
+const filteredAnnouncements = announcements.filter((a) => {
+  const searchTerm = searchQuery.toLowerCase();
+  const plainDescription = a.description
+    ? getPlainText(a.description).toLowerCase()
+    : "";
+  return (
+    a.title.toLowerCase().includes(searchTerm) ||
+    plainDescription.includes(searchTerm)
+  );
+});
+
+// HTML-strip helper:
+const getPlainText = (html: string) => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body.textContent || "";
+};
+```
+
+<Note>
+  The search in `AnnouncementListShort` is a client-side substring filter on the already-loaded list. It does not re-query the backend.
+</Note>
+
+Each announcement row:
+- Highlights pinned items with a red border (`border-bapred`) and a red tinted background (`bg-red-50`)
+- Shows a pin SVG icon next to the title for `is_pinned === true`
+- Truncates the description to 2 lines via `line-clamp-2`
+- Shows `created_at` formatted as `"MMM d, yyyy 'at' h:mm a"` (e.g., `Jan 15, 2025 at 2:30 PM`) using `date-fns`
+- Clicking anywhere on the row calls `onView(announcement)` to open `ViewAnnouncementModal`
+
+## ViewAnnouncementModal
+
+A separate admin-shared modal (`components/admin/ViewAnnouncementModal`) renders the full announcement including the HTML `description`. It is opened from `MemberAnnouncementsListModal.handleViewAnnouncement` and stacks on top of the list modal (z-index is managed by the portal system).
+
+## Target Audience Field
+
+The `target_audience` field on `Announcement` (`"all" | "members" | "pledges"`) is filtered server-side — the `GET /announcements` endpoint already returns only announcements relevant to the calling user. The client does not re-filter by this field.
+
+## Alumni Restrictions
+
+```typescript
+// In MemberDescription render:
+const isAlumniUser = isAlumni(rank);
+
+{!isAlumniUser && (
+  <div>
+    <button onClick={handleOpenAnnouncementsModal}>
+      <Bell ... />
+      {/* badge */}
+    </button>
+    <button onClick={() => window.open("https://beta-alpha-psi-space.slack.com/", "_blank")}>
+      <FaSlack ... />
+    </button>
+  </div>
+)}
+```
+
+The entire right-side button group (bell + Slack) is conditionally excluded. No fetch is prevented — the announcement fetch still runs — but the UI is invisible to alumni.
+
+`canAccessFeature("alumni", "announcements")` returns `false` per `utils/permissions.ts`. If you add a standalone announcements route, gate it with this helper.
+
+## Extending Announcements
+
+<Accordion title="Adding server-side read tracking">
+  Replace the localStorage helpers with API calls. On open, POST the announcement IDs to a `/announcements/mark-read` endpoint. On mount, fetch unread count from `/announcements/unread-count` instead of computing locally.
+</Accordion>
+
+<Accordion title="Adding per-announcement read state">
+  Currently all IDs are marked read on modal open. To mark items read individually, call `addAnnouncementsToReadStorage([announcement.id])` inside `handleViewAnnouncement` and then `calculateUnreadCount()` after.
+</Accordion>
+
+<Accordion title="Showing announcements to alumni">
+  Remove the `!isAlumniUser` guard around the bell button in `MemberDescription`. Alumni-specific announcements would need a new `target_audience` value (e.g., `"alumni"`) supported by the backend filter.
+</Accordion>

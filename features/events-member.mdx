@@ -1,0 +1,344 @@
+---
+title: "Events: RSVP, Check-In & Calendar Subscribe"
+sidebarTitle: "Events"
+description: "Full reference for the member-facing Events page covering RSVP toggling, geolocation check-in flow, ICS calendar subscription, and the MemberEvent vs AdminEvent type shapes."
+---
+
+The Events system is accessible at `/events` (list view) and `/events/:eventId` (detail view, `ViewEvent`). Both routes are wrapped in `ProtectedRoute`. `EventsPage` is the primary interface; it fetches all events, partitions them into three time-based sections, supports text search, and renders one `EventCard` per event. Each card encapsulates the RSVP widget (`EventRSVP`) and the geolocation check-in widget (`EventCheckIn`). A `CalendarSubscribeButton` in the page header lets authenticated, non-alumni, non-sponsor members subscribe to an ICS feed.
+
+## Event Type System
+
+The platform distinguishes between events as seen by members and as seen by administrators. Both extend `BaseEvent`.
+
+<Tabs>
+  <Tab title="BaseEvent (shared)">
+    ```typescript
+    type BaseEvent = {
+      id: string;
+      event_name: string;
+      event_description: string;
+      event_location?: string;
+      event_date: string;           // "YYYY-MM-DD"
+      event_time?: string;          // "HH:MM:SS"
+      dress_code?: string;
+      event_hours?: number;
+      event_hours_type?: string;    // e.g. "professional", "service"
+      sponsors_attending?: string[];
+      event_limit?: number;         // Optional cap on RSVPs
+      rsvp_count: number;
+      attending_count: number;
+    };
+    ```
+  </Tab>
+  <Tab title="MemberEvent">
+    Returned by `GET /events` for `general-member` and `sponsor` roles:
+
+    ```typescript
+    type MemberEvent = BaseEvent & {
+      event_lat?: number | null;    // Only present after RSVP
+      event_long?: number | null;   // Only present after RSVP
+      user_rsvped: boolean;         // Current user's RSVP status
+      user_attended: boolean;       // Current user's check-in status
+      can_check_in: boolean;        // Computed by backend
+      check_in_window?: number;     // Minutes; only present if RSVP'd
+      check_in_radius?: number;     // Metres; only present if RSVP'd
+    };
+    ```
+
+    <Note>
+      `event_lat` and `event_long` are `null` until the member RSVPs. The backend reveals the coordinates only after the RSVP is confirmed, which is why `EventCheckIn` uses the browser Geolocation API rather than comparing against a static value.
+    </Note>
+  </Tab>
+  <Tab title="AdminEvent">
+    Returned for the `e-board` role:
+
+    ```typescript
+    type AdminEvent = BaseEvent & {
+      event_lat: number;            // Always present
+      event_long: number;           // Always present
+      event_rsvped: string[];       // User IDs
+      event_attending: string[];    // User IDs
+      is_hidden: boolean;
+      check_in_window: number;
+      check_in_radius: number;
+      user_rsvped: boolean;
+      user_attended: boolean;
+    };
+    ```
+
+    Admins additionally get a collapsible **RSVPs and Attendees** panel inside each `EventCard` that lazily loads `GET /events/:id/participants`.
+  </Tab>
+</Tabs>
+
+## Page Data Fetching
+
+`EventsPage` uses `useEffect` with an `AbortController` to cancel stale requests on cleanup:
+
+```typescript
+const endpoint = session?.access_token
+  ? `${VITE_BACKEND_URL}/events`         // authenticated — returns MemberEvent[]
+  : `${VITE_BACKEND_URL}/events/public`; // unauthenticated — public subset only
+```
+
+The user's rank is fetched separately from `GET /member-info/me` so that the page can gate the RSVP and check-in buttons before the event list arrives. Both fetches are refired on `visibilitychange` and `window.focus` events to keep the rank current after tab switches (e.g., after changing rank in another tab).
+
+### Event Partitioning
+
+After filtering by the search query and the admin hidden/standard toggle, events are bucketed:
+
+```typescript
+const inSessionEvents = filteredEvents.filter((e) =>
+  isEventInSession(e.event_date, e.event_time || '00:00:00', e.event_hours || 0)
+);
+
+const upcomingEvents = filteredEvents
+  .filter((e) => !isEventInSession(...) && getEventDateTime(e) >= now)
+  .sort((a, b) => getEventDateTime(a) - getEventDateTime(b));  // ascending
+
+const pastEvents = filteredEvents
+  .filter((e) => !isEventInSession(...) && getEventDateTime(e) < now)
+  .sort((a, b) => getEventDateTime(b) - getEventDateTime(a));  // descending
+```
+
+Past events are paginated client-side. The initial page shows 3 items; each **Load More** click adds 3 more (`PAST_EVENTS_INCREMENT = 3`).
+
+## Search
+
+A plain substring search (not fuzzy) is applied across three fields:
+
+```typescript
+const filteredEvents = allEvents.filter((event) => {
+  const query = searchQuery.toLowerCase();
+  return (
+    event.event_name.toLowerCase().includes(query) ||
+    event.event_location?.toLowerCase().includes(query) ||
+    event.event_description?.toLowerCase().includes(query)
+  );
+});
+```
+
+The search input and `CalendarSubscribeButton` share the header row via a flex container.
+
+## EventCard
+
+`EventCard` is the single presentational unit for all event types across the platform (EventsPage, EventMember dashboard panel, and the admin view). Key props:
+
+```typescript
+interface EventCardProps {
+  event: Event;           // MemberEvent | AdminEvent union
+  isPast: boolean;
+  isHighlighted?: boolean;  // Scroll-to-and-flash from location.state
+  registerRef?: (el: HTMLDivElement | null) => void;
+  hideRSVP?: boolean;       // True for in-session cards in dashboard
+  userRank?: string;        // For isAlumni() check
+  rankLoading?: boolean;    // Prevents flash of RSVP button before rank loads
+  onEdit?: () => void;      // e-board only
+  onAnnounce?: () => void;  // e-board only
+  onDelete?: () => void;    // e-board only
+  onCheckInSuccess?: () => void;
+}
+```
+
+The RSVP and check-in buttons are rendered only when all of the following are true:
+- `!isPast`
+- `isLoggedIn`
+- `!loading` (auth context not loading)
+- `!propRankLoading`
+- `!isAlumniUser` (derived from `isAlumni(propUserRank)`)
+
+The `formatDateTime` helper used in the card:
+
+```typescript
+export const formatDateTime = (date?: string, time?: string | null) => {
+  if (!date) return null;
+  const eventDate = new Date(`${date}T${time || '00:00:00'}`);
+  const formattedDate = eventDate.toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
+  const formattedTime = eventDate.toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", hour12: true,
+  });
+  return time ? `${formattedDate} at ${formattedTime}` : formattedDate;
+};
+```
+
+## RSVP Flow
+
+`EventRSVP` is a self-contained toggle button. It maintains local `localRSVPed` state (seeded from the `user_rsvped` prop) so the UI responds immediately without waiting for a refetch.
+
+<Steps>
+  <Step title="User clicks RSVP / Un-RSVP">
+    A confirmation `Modal` is shown with the event name and the action label.
+  </Step>
+  <Step title="User confirms">
+    The component selects the endpoint based on current state:
+
+    ```typescript
+    const endpoint = localRSVPed
+      ? `${VITE_BACKEND_URL}/events/unrsvp/${eventId}`   // DELETE RSVP
+      : `${VITE_BACKEND_URL}/events/rsvp/${eventId}`;    // ADD RSVP
+
+    // Both use POST:
+    await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+    ```
+  </Step>
+  <Step title="Success handling">
+    `localRSVPed` is toggled, a `react-hot-toast` message is shown, and the optional `onRSVPChange` callback fires (used by admins to refetch participants).
+  </Step>
+  <Step title="Full RSVP cap">
+    When `event_limit` is set and `rsvp_count >= event_limit`, the RSVP button renders as gray and disabled — but only if the member has not already RSVP'd (existing RSVPs can always be cancelled).
+  </Step>
+</Steps>
+
+## Check-In Flow
+
+`EventCheckIn` uses the browser's Geolocation API. The backend validates that the submitted coordinates are within the configured `check_in_radius`.
+
+<Steps>
+  <Step title="Session window check">
+    `isEventInSession()` is evaluated on click. If the event has not started or has already ended (based on `event_date`, `event_time`, and `event_hours`), a toast error fires and the function returns early:
+
+    ```typescript
+    export const isEventInSession = (
+      eventDate: string,
+      eventTime: string,
+      eventHours: number
+    ): boolean => {
+      const start = new Date(`${eventDate}T${eventTime}`);
+      const end = new Date(start.getTime() + eventHours * 60 * 60 * 1000);
+      const now = new Date();
+      return now >= start && now <= end;
+    };
+    ```
+  </Step>
+  <Step title="Check-in window enforcement">
+    A separate deadline is computed: `checkInDeadline = start + checkInWindowMinutes * 60 * 1000`. If the current time is past this deadline, check-in is blocked with a descriptive toast.
+
+    `checkInWindowMinutes` defaults to `15` if not provided via the `check_in_window` field on the event.
+  </Step>
+  <Step title="Pre-flight guards">
+    Before requesting location, the component verifies:
+    - `navigator.geolocation` is supported
+    - A valid `session.access_token` exists
+    - The user has not already checked in (`userAttended || localCheckedIn`)
+    - The user is RSVP'd (`userRsvped === true`)
+  </Step>
+  <Step title="Geolocation request">
+    Status becomes `"locating"` and `navigator.geolocation.getCurrentPosition()` is called with:
+
+    ```typescript
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,       // 10 seconds
+      maximumAge: 0,        // Always fresh
+    }
+    ```
+  </Step>
+  <Step title="Backend submission">
+    Status advances to `"sending"`. Coordinates and accuracy are POSTed:
+
+    ```http
+    POST /events/checkin/<eventId>
+    Authorization: Bearer <access_token>
+    Content-Type: application/json
+
+    { "latitude": 40.7128, "longitude": -74.0060, "accuracy": 12.5 }
+    ```
+
+    The backend computes the Haversine distance between the submitted coordinates and `event_lat`/`event_long` and accepts the check-in only if within `check_in_radius` metres.
+  </Step>
+  <Step title="Success handling">
+    `localCheckedIn` is set to `true` (disabling the button immediately), a success toast is shown, and `onCheckInSuccess?.()` fires so `EventMember` can refresh the event list and trigger a user-detail refresh to update total hours.
+  </Step>
+</Steps>
+
+### Button states
+
+| State | Button label | Button colour | Disabled? |
+|---|---|---|---|
+| `idle`, not in session | Check In | Gray | ✅ |
+| `idle`, in session, not RSVP'd | Check In | Red | ✅ |
+| `idle`, in session, RSVP'd | Check In | Red | ❌ |
+| `locating` | Getting Location... | Gray | ✅ |
+| `sending` | Checking in... | Gray | ✅ |
+| `success` | ✓ Checked In | Green | ✅ |
+| `error` | Try Again | Red | ❌ |
+| Already attended | Checked In | Gray | ✅ |
+
+<Note>
+  `canCheckIn` (from `MemberEvent.can_check_in`) is received as a prop but the component currently computes in-session state locally via `isEventInSession`. The backend-provided value is stored as `_canCheckIn` (prefixed underscore) and not used directly.
+</Note>
+
+## Calendar Subscription
+
+`CalendarSubscribeButton` renders only for authenticated users who are not sponsors and not alumni:
+
+```typescript
+const shouldShowButton = () => {
+  if (!isAuthenticated) return false;
+  if (role?.toLowerCase().includes("sponsor")) return false;
+  if (role?.toLowerCase().includes("alumni")) return false;
+  return true;
+};
+```
+
+Clicking the button opens a modal displaying the ICS feed URL and copy-paste instructions for Google Calendar, Apple Calendar, and Outlook:
+
+```
+GET /events/calendar.ics
+```
+
+The URL is constructed from `VITE_BACKEND_URL` at runtime (no auth token — the ICS feed is publicly accessible by URL).
+
+<Tip>
+  The `VITE_BACKEND_URL` environment variable must not have a trailing slash. The ICS URL is built as `` `${baseUrl}/events/calendar.ics` ``.
+</Tip>
+
+<Accordion title="Google Calendar instructions (shown in modal)">
+  Open Google Calendar → Settings (gear icon) → Add calendar → From URL → Paste the ICS URL → Add calendar.
+</Accordion>
+<Accordion title="Apple Calendar instructions (shown in modal)">
+  File → New Calendar Subscription → Paste URL → Subscribe.
+</Accordion>
+<Accordion title="Outlook instructions (shown in modal)">
+  Calendar → Add Calendar → From Internet → Paste URL → OK.
+</Accordion>
+
+## ViewEvent Page
+
+`/events/:eventId` fetches a single event via `POST /events` with `{ event_id: eventId }` in the body. It is a lightweight read-only detail view that renders name, location, date, time, description, dress code, sponsors, RSVP count, and attendance count. This page is not currently used as the primary event UI — `EventCard` on `/events` is the richer interactive surface.
+
+## Alumni Restrictions
+
+Alumni (`rank === "alumni"`) are blocked from RSVP and check-in by `isAlumni()` in `EventCard`:
+
+```typescript
+import { isAlumni } from "../../utils/permissions";
+
+const isAlumniUser = isAlumni(propUserRank);
+
+// RSVP and check-in row is conditionally rendered:
+{!isPast && isLoggedIn && !loading && !propRankLoading && !isAlumniUser && (
+  <div>
+    <EventRSVP ... />
+    <EventCheckIn ... />
+  </div>
+)}
+```
+
+`CalendarSubscribeButton` also hides itself for alumni.
+
+## Extending Events
+
+To add a new event field visible to members:
+1. Add the field to `BaseEvent` in `types/index.ts`.
+2. Include it in the backend response for `GET /events`.
+3. Render it inside the `EventCard` grid (the two-column `div.grid` section).
+
+To change the check-in window enforcement from client-side to server-driven, replace the `checkInDeadline` logic in `EventCheckIn` with the backend-provided `check_in_window` field that already arrives with `MemberEvent`.

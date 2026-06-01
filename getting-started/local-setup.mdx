@@ -1,0 +1,149 @@
+---
+title: "Local Development Setup for BAP Beta Tau Frontend"
+sidebarTitle: "Local Setup"
+description: "A complete step-by-step guide to cloning the repo, installing dependencies, configuring environment variables, and running the Vite dev server locally."
+---
+
+Getting the BAP Beta Tau frontend running locally takes about five minutes. The project is a standard Vite + React SPA with no monorepo tooling complexity — you clone the repo, create a `.env` file with the three required variables, install Node dependencies, and start the dev server. The dev server runs on `http://localhost:5173` by default and supports hot module replacement (HMR) for instant feedback while you work. Before you begin, make sure you have Node.js 18 or later and either `npm` or `pnpm` installed on your machine.
+
+## Prerequisites
+
+<CardGroup cols={3}>
+  <Card title="Node.js ≥ 18" icon="node-js">
+    The build toolchain (Vite, TypeScript, ESLint) requires Node 18+. Check with `node -v`.
+  </Card>
+  <Card title="npm or pnpm" icon="package">
+    The lockfile in the repo is `package-lock.json` (npm). You can also use `pnpm` — just run `pnpm install` instead.
+  </Card>
+  <Card title="Git" icon="code-branch">
+    You need Git to clone the repository. If you are a chapter contributor, request access to the GitHub org from an e-board officer.
+  </Card>
+</CardGroup>
+
+## Setup Steps
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the monorepo and navigate into the frontend package. The frontend lives inside the `Frontend/` directory.
+
+    ```bash
+    git clone https://github.com/asubap/website.git
+    cd website/Frontend
+    ```
+
+    <Note>
+      If you are working from a fork, replace the URL with your fork's remote. Make sure to set the upstream remote so you can pull in upstream changes: `git remote add upstream https://github.com/asubap/website.git`.
+    </Note>
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all Node dependencies. The project uses a flat `node_modules` in `Frontend/` — there is no workspace hoisting.
+
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install
+        ```
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm install
+        ```
+      </Tab>
+    </Tabs>
+
+    This installs both `dependencies` (runtime) and `devDependencies` (TypeScript, ESLint, Vite plugins). Expect around 300–400 packages.
+  </Step>
+
+  <Step title="Create your environment file">
+    Copy the example below into a new file named `.env` at the root of `Frontend/`. Never commit this file — it is already listed in `.gitignore`.
+
+    ```bash
+    # Frontend/.env
+    VITE_BACKEND_URL=https://your-backend-api.example.com
+    VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+    VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+    ```
+
+    See the [Environment Variables](/getting-started/environment-variables) guide for where to find each value.
+
+    <Warning>
+      All variables exposed to the browser **must** be prefixed with `VITE_`. Variables without this prefix are not bundled by Vite and will be `undefined` at runtime. Never place secrets (service role keys, private keys) in this file.
+    </Warning>
+  </Step>
+
+  <Step title="Start the development server">
+    Run the Vite dev server. It starts at `http://localhost:5173` and proxies nothing by default — your `VITE_BACKEND_URL` value points directly to the live or staging API.
+
+    ```bash
+    npm run dev
+    ```
+
+    You should see output similar to:
+
+    ```
+      VITE v6.2.x  ready in 312 ms
+
+      ➜  Local:   http://localhost:5173/
+      ➜  Network: use --host to expose
+      ➜  press h + enter to show help
+    ```
+
+    Open `http://localhost:5173` in your browser. The app will hot-reload on any file save.
+  </Step>
+</Steps>
+
+## Available Scripts
+
+All scripts are defined in `Frontend/package.json` and run via `npm run <script>`.
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `vite` | Starts the Vite HMR dev server on port 5173. |
+| `build` | `tsc -b && vite build` | Type-checks the project with the TypeScript compiler, then produces an optimized production bundle in `dist/`. |
+| `preview` | `vite preview` | Serves the production `dist/` build locally so you can verify the bundle before deploying. |
+| `lint` | `eslint .` | Runs ESLint across all `.ts` and `.tsx` files using the config in `eslint.config.js`. |
+
+```json
+// package.json — scripts section
+"scripts": {
+  "dev":     "vite",
+  "build":   "tsc -b && vite build",
+  "lint":    "eslint .",
+  "preview": "vite preview"
+}
+```
+
+<Tip>
+  Run `npm run build` before opening a pull request to catch TypeScript type errors early. The `tsc -b` step in the build command performs a full project-reference type check and will fail if there are any type errors — the same check that runs in CI.
+</Tip>
+
+## Verifying Your Setup
+
+Once the dev server is running, confirm the following to ensure everything is wired correctly:
+
+1. **Homepage loads** — `http://localhost:5173/` should render the public homepage with the BAP logo and navigation bar.
+2. **Login page works** — `http://localhost:5173/login` should show the Google OAuth button. Clicking it will redirect to your Supabase project's OAuth consent screen.
+3. **API connectivity** — After logging in, the app makes a `POST /users` request to `VITE_BACKEND_URL`. Open the browser's Network tab and confirm it returns a `200` with a role payload. If it returns `401` or `403`, your Supabase token may not match a registered user in the backend.
+
+<Note>
+  If the Google OAuth redirect fails locally, verify that `http://localhost:5173` is listed as an allowed redirect URL in your Supabase project's **Authentication → URL Configuration** settings.
+</Note>
+
+## Common Issues
+
+<Accordion title="Port 5173 is already in use">
+  Another Vite process (or any service) is bound to port 5173. Kill it with `lsof -ti:5173 | xargs kill -9` on macOS/Linux, or pass a custom port: `npm run dev -- --port 3000`.
+</Accordion>
+
+<Accordion title="Environment variables are undefined at runtime">
+  Make sure your `.env` file is at `Frontend/.env` (not the repo root) and that every variable name starts with `VITE_`. Restart the dev server after creating or modifying `.env` — Vite does not hot-reload env files.
+</Accordion>
+
+<Accordion title="Google OAuth redirect goes to the wrong URL">
+  Add `http://localhost:5173` to the **Redirect URLs** list in Supabase → Authentication → URL Configuration. Without this, Supabase will block the OAuth callback.
+</Accordion>
+
+<Accordion title="TypeScript errors on npm install">
+  If you see errors like `Cannot find module`, run `npm run build` to see the full tsc output. The project targets TypeScript ~5.7.2 — using an older global `tsc` will cause version mismatches. The locally installed version in `node_modules/.bin/tsc` is always used by the build script.
+</Accordion>

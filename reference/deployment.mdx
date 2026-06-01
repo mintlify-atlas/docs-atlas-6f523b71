@@ -1,0 +1,225 @@
+---
+title: "Deployment: Vercel Configuration and Environment Setup"
+sidebarTitle: "Deployment"
+description: "Complete guide to deploying the BAP Beta Tau React SPA on Vercel, including build commands, SPA routing rewrites, environment variables, and local development setup."
+---
+
+The BAP Beta Tau frontend is a Vite + React 19 + TypeScript single-page application deployed on Vercel. Vercel handles both the build pipeline and static asset hosting. Because the app uses React Router for client-side navigation, a single rewrite rule is required to ensure all routes are served by `index.html`.
+
+---
+
+## Project Structure
+
+```
+website/
+├── Frontend/
+│   ├── src/
+│   ├── public/
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   └── vercel.json       ← SPA routing configuration
+└── COOKIE_MIGRATION.md
+```
+
+---
+
+## Build Command
+
+```bash
+tsc -b && vite build
+```
+
+This runs in two steps:
+
+1. **`tsc -b`** — TypeScript project build (composite mode). Performs full type-checking and emits declaration files. Build fails on type errors.
+2. **`vite build`** — Vite production build. Bundles the application, applies tree-shaking, and outputs optimised assets to `dist/`.
+
+The output in `dist/` is a static directory containing `index.html` and hashed asset files that Vercel serves.
+
+---
+
+## SPA Routing — `vercel.json`
+
+React Router handles all navigation client-side, but Vercel (as a static host) needs to be told that any path should serve `index.html` rather than returning a 404.
+
+```json
+// Frontend/vercel.json
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+```
+
+This single catch-all rewrite ensures that direct navigation to any route — `/sponsor`, `/admin`, `/events/42`, etc. — returns `index.html`, which bootstraps React and React Router takes over from there.
+
+<Warning>
+  Without this `vercel.json`, deep-linking to any route other than `/` will return a Vercel 404 error because no static file exists at that path.
+</Warning>
+
+---
+
+## Environment Variables
+
+All environment variables are prefixed with `VITE_` so Vite injects them at build time (they become inlined constants in the bundle — they are **not** secret). Sensitive values must be set in the Vercel dashboard, not in committed `.env` files.
+
+### Required Variables
+
+| Variable | Purpose | Example |
+|---|---|---|
+| `VITE_BACKEND_URL` | Base URL for all API requests | `https://asubap-backend.vercel.app` |
+| `VITE_SUPABASE_URL` | Supabase project URL | `https://xxxx.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | Supabase anonymous/public key | `eyJhbGci...` |
+| `VITE_ENV_STATE` | Controls redirect URLs in auth | `"production"` or `"development"` |
+
+### Setting Variables in Vercel
+
+<Steps>
+  <Step title="Open project settings">
+    In the [Vercel Dashboard](https://vercel.com/dashboard), select the project → **Settings** → **Environment Variables**.
+  </Step>
+  <Step title="Add each variable">
+    Click **Add New** for each variable. Choose which environments to apply it to (Production, Preview, Development).
+  </Step>
+  <Step title="Redeploy">
+    Environment variable changes require a new deployment to take effect. Trigger one via **Deployments** → **Redeploy**, or by pushing a new commit.
+  </Step>
+</Steps>
+
+<Note>
+  Because `VITE_*` variables are inlined at build time, changing a variable in the Vercel dashboard without redeploying has no effect. Always redeploy after updating environment variables.
+</Note>
+
+---
+
+## Auth Redirect Configuration
+
+The `VITE_ENV_STATE` variable controls which domain Supabase redirects to after OAuth:
+
+```typescript
+// src/components/auth/GoogleLogin.tsx
+const baseUrl =
+  import.meta.env.VITE_ENV_STATE === "development"
+    ? "http://localhost:5173"
+    : "http://asubap.com";
+```
+
+The OAuth redirect target is always `${baseUrl}/login`. After OAuth completes, `LogInPage` (or `AuthProvider`'s listener) handles the session.
+
+You must add the production redirect URL (`http://asubap.com/login`) to the **Allowed Redirect URLs** list in your Supabase project under **Authentication** → **URL Configuration**.
+
+---
+
+## Application Routes
+
+The full route table defined in `App.tsx`:
+
+### Public Routes
+
+| Path | Component |
+|---|---|
+| `/` | `Homepage` |
+| `/login` | `LogInPage` |
+| `/about` | `AboutPage` |
+| `/sponsors` | `SponsorsPage` |
+| `/events` | `EventsPage` |
+| `/membership` | `ProcessFlow` |
+| `/contact-us` | `ContactUsPage` |
+| `/eboard-faculty` | `EboardFacultyPage` |
+
+### Protected Routes (require authentication via `ProtectedRoute`)
+
+| Path | Component | Required Role |
+|---|---|---|
+| `/auth/Home` | `AuthHome` | Any (or none — shows error) |
+| `/admin` | `Admin` | `e-board` |
+| `/sponsor` | `SponsorHome` | `sponsor` |
+| `/member` | `MemberView` | `general-member` |
+| `/network` | `NetworkingPage` | Any authenticated |
+| `/alumni` | `AlumniPage` | Any authenticated |
+| `/eboard-network` | `EboardPage` | Any authenticated |
+| `/sponsors-network` | `SponsorsNetworkPage` | Any authenticated |
+| `/events/:eventId` | `ViewEvent` | Any authenticated |
+| `/resources` | `ResourcesPage` | Any authenticated |
+
+### Catch-All
+
+| Path | Component |
+|---|---|
+| `*` | `NotFound` |
+
+---
+
+## Local Development
+
+```bash
+# Install dependencies
+cd Frontend
+npm install
+
+# Start dev server
+npm run dev
+# → http://localhost:5173
+```
+
+Create a `Frontend/.env.local` file (never commit this):
+
+```env
+VITE_BACKEND_URL=https://asubap-backend.vercel.app
+VITE_SUPABASE_URL=https://xxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGci...
+VITE_ENV_STATE=development
+```
+
+<Tip>
+  Point `VITE_BACKEND_URL` at the production backend during local development unless you are running the backend locally. The backend is stateless for most read operations, so mixing local frontend + production backend is safe.
+</Tip>
+
+---
+
+## Vercel Preview Deployments
+
+Every pull request automatically receives a Vercel Preview deployment with its own URL. To ensure Preview deployments work:
+
+1. Add all required environment variables to the **Preview** environment in Vercel settings.
+2. Add Preview deployment URLs (e.g., `https://website-git-*.vercel.app/login`) to Supabase's **Allowed Redirect URLs** if you need OAuth to work in previews.
+
+---
+
+## Deployment Checklist
+
+<Steps>
+  <Step title="Set environment variables">
+    Confirm `VITE_BACKEND_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_ENV_STATE` are all set in Vercel → Production environment.
+  </Step>
+  <Step title="Configure Supabase redirect URLs">
+    Add `http://asubap.com/login` (and any preview URLs) to Supabase → Authentication → URL Configuration → Allowed Redirect URLs.
+  </Step>
+  <Step title="Verify vercel.json is committed">
+    Ensure `Frontend/vercel.json` exists in the repository. Vercel reads it automatically during deployment.
+  </Step>
+  <Step title="Run build locally to catch type errors">
+    ```bash
+    cd Frontend && tsc -b && vite build
+    ```
+    Fix any TypeScript errors before pushing.
+  </Step>
+  <Step title="Push and monitor deployment">
+    Push to the main branch. Monitor the Vercel dashboard for build logs and deployment status.
+  </Step>
+</Steps>
+
+---
+
+## Backend Deployment
+
+The backend is a separate Vercel project deployed at `https://asubap-backend.vercel.app`. It is maintained separately from the frontend repository. Key backend environment variables (set in its own Vercel project):
+
+| Variable | Purpose |
+|---|---|
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-side key for admin operations |
+
+See the [Backend API Reference](/reference/backend-api) for endpoint documentation.

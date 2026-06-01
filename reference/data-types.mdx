@@ -1,0 +1,300 @@
+---
+title: "TypeScript Data Types: Interfaces and Type Definitions"
+sidebarTitle: "Data Types"
+description: "Full TypeScript interface definitions used across the BAP Beta Tau frontend, sourced from src/types/index.ts and src/services/memberArchiveService.ts."
+---
+
+All shared TypeScript types live in `src/types/index.ts`. Service-specific types (archive/restore) are co-located with their service in `src/services/memberArchiveService.ts`. This page documents every interface and type exported from these files with field-level explanations.
+
+---
+
+## MemberDetail
+
+The primary type representing a fully-hydrated member profile, returned by `GET /member-info/:email`.
+
+```typescript
+// src/types/index.ts
+export interface MemberDetail {
+  id: string;
+  email: string;
+  userEmail?: string;        // Alias — same value as email in some contexts
+  name: string;
+  phone: string;
+  major: string;
+  graduationDate: string;    // Expected graduation year or date string
+  status: string;            // "Looking for Internship" | "Looking for Full-time" | "Not Looking"
+  about: string;             // Member bio
+  internship: string;        // Current or most recent internship
+  photoUrl: string;          // Profile photo URL
+  hours: string;             // Total accumulated event hours
+  developmentHours?: string;
+  professionalHours?: string;
+  serviceHours?: string;
+  socialHours?: string;
+  links?: string[];          // External links (LinkedIn, GitHub, etc.)
+  rank: string;              // "Current" | "Pledge" | "Alumni"
+  role: string;              // "e-board" | "general-member" | "sponsor-admin"
+  event_attendance?: any[];  // Array of attended event records from API
+  deleted_at?: string | null; // Non-null means the member is archived
+  type?: "member";           // Discriminant field used by NetworkList
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | Internal database identifier, always a string |
+| `rank` | Determines display in `NetworkList` — alumni don't show hours |
+| `deleted_at` | `null` = active, ISO timestamp = archived |
+| `type` | Used by `NetworkList` to discriminate between `MemberDetail` and `Sponsor` |
+| `status` | Job-search status shown on member cards |
+
+---
+
+## MemberRank
+
+A union type for the three valid rank values used in rank-based permission checks.
+
+```typescript
+// src/types/index.ts
+export type MemberRank = 'pledge' | 'inducted' | 'alumni';
+```
+
+<Note>
+  Note the casing distinction: `MemberRank` uses lowercase `'inducted'` while `MemberDetail.rank` stores `"Current"` (title case). The `isAlumni()` utility in `src/utils/permissions.ts` normalises both.
+</Note>
+
+---
+
+## Announcement
+
+Represents a chapter announcement visible to members via `GET /announcements`.
+
+```typescript
+// src/types/index.ts
+export interface Announcement {
+  id: string;
+  title: string;
+  description: string;
+  created_at?: string;           // ISO timestamp
+  updated_at?: string;           // ISO timestamp
+  is_pinned?: boolean;           // Pinned announcements sort to top
+  target_audience?: "all" | "members" | "pledges";
+  date?: string;                 // Legacy general date field
+  announcement_date?: string | null; // Legacy specific date field
+}
+```
+
+---
+
+## Event Types
+
+The events system uses a base type extended by two role-specific variants, plus a union for component use.
+
+### BaseEvent
+
+Fields shared by all event views, regardless of role.
+
+```typescript
+// src/types/index.ts
+export type BaseEvent = {
+  id: string;
+  event_name: string;
+  event_description: string;
+  event_location?: string;
+  event_date: string;            // "YYYY-MM-DD"
+  event_time?: string;           // "HH:MM:SS"
+  dress_code?: string;
+  event_hours?: number;
+  event_hours_type?: string;     // "professional" | "service" | "social" | "development"
+  sponsors_attending?: string[]; // Sponsor company names
+  event_limit?: number;          // Max RSVP cap (null = unlimited)
+  rsvp_count: number;            // Aggregate across all users
+  attending_count: number;       // Aggregate across all users
+};
+```
+
+### MemberEvent
+
+Returned for `general-member` and `sponsor` roles. Adds per-user status fields so members can see their own RSVP and attendance state.
+
+```typescript
+// src/types/index.ts
+export type MemberEvent = BaseEvent & {
+  event_lat?: number | null;    // Only present when user has RSVP'd
+  event_long?: number | null;   // Only present when user has RSVP'd
+  user_rsvped: boolean;         // Current user's RSVP status
+  user_attended: boolean;       // Current user's attendance status
+  can_check_in: boolean;        // Whether check-in window is currently open
+  check_in_window?: number;     // Minutes window (only if RSVP'd)
+  check_in_radius?: number;     // Meters radius (only if RSVP'd)
+};
+```
+
+### AdminEvent
+
+Returned for the `e-board` role. Includes full participant lists and location data.
+
+```typescript
+// src/types/index.ts
+export type AdminEvent = BaseEvent & {
+  event_lat: number;            // Always present for admin
+  event_long: number;           // Always present for admin
+  event_rsvped: string[];       // Array of user IDs (not emails)
+  event_attending: string[];    // Array of user IDs (not emails)
+  is_hidden: boolean;           // Hidden from non-admin views
+  check_in_window: number;      // Minutes — always present for admin
+  check_in_radius: number;      // Meters — always present for admin
+  user_rsvped: boolean;         // Admin's own RSVP status
+  user_attended: boolean;       // Admin's own attendance status
+};
+```
+
+### EventParticipants
+
+Detailed participant data returned by `GET /events/:eventId/participants` (e-board only). Unlike `AdminEvent`, this includes full user details for each participant.
+
+```typescript
+// src/types/index.ts
+export type EventParticipants = {
+  event_id: string;
+  event_name: string;
+  rsvped_users: {
+    user_id: string;
+    name: string;
+    user_email: string;
+  }[];
+  attending_users: {
+    user_id: string;
+    name: string;
+    user_email: string;
+    checked_in_at?: string;  // ISO timestamp of check-in
+  }[];
+  rsvp_count: number;
+  attending_count: number;
+};
+```
+
+### Event (union)
+
+The primary union type used by `EventCard` and page-level components. Use this instead of `MemberEvent | AdminEvent` directly.
+
+```typescript
+// src/types/index.ts
+export type Event = MemberEvent | AdminEvent;
+```
+
+When you need to access fields unique to one variant, use type narrowing:
+
+```typescript
+// Narrowing example in EventCard
+const userRsvped = 'user_rsvped' in event ? event.user_rsvped : false;
+const checkInWindow = 'check_in_window' in event ? event.check_in_window : undefined;
+```
+
+---
+
+## Sponsor
+
+Represents a sponsor company as used throughout the frontend. The `type` discriminant enables `NetworkList` to render sponsor cards differently from member cards.
+
+```typescript
+// src/types/index.ts
+export interface Sponsor {
+  id?: string;                          // Standardized to string
+  type?: "sponsor";                     // Discriminant for NetworkList
+  name: string;
+  about: string;
+  links?: string[] | null;
+  photoUrl?: string | null;             // Profile logo URL
+  resources?: { label: string; url: string }[] | null;
+  tier?: string;                        // "gold" | "silver" | "bronze" | ...
+  emails?: string[];                    // Contact emails for the sponsor
+}
+```
+
+---
+
+## EboardFacultyEntry
+
+Represents a single e-board position or faculty advisor role, returned by `GET /eboard`.
+
+```typescript
+// src/types/index.ts
+export type EboardFacultyEntry = {
+  role: string;                 // Position title, e.g. "President"
+  role_email: string;           // Position email, e.g. "president@bap.org"
+  email: string;                // Holder's personal email
+  display_email?: string;       // Publicly shown email (may differ from email)
+  profile_photo_url?: string;   // Photo URL
+  name: string | null;          // Full name of position holder
+  major: string | null;         // Academic major
+  rank?: number;                // Display sort order
+};
+```
+
+---
+
+## Archive Types
+
+Defined in `src/services/memberArchiveService.ts` and used by the member archive/restore service functions.
+
+### ArchiveResponse
+
+The shape returned by both `POST /member-info/:email/archive` and `POST /member-info/:email/restore`.
+
+```typescript
+// src/services/memberArchiveService.ts
+export interface ArchiveResponse {
+  success: boolean;
+  message: string;  // Human-readable result description
+}
+```
+
+### ArchivedMember
+
+The shape of each item in the array returned by `GET /member-info/archived`.
+
+```typescript
+// src/services/memberArchiveService.ts
+export interface ArchivedMember {
+  email: string;
+  name: string;
+  deleted_at: string;      // ISO timestamp of soft-deletion
+  role: string;            // Role at time of archival
+  rank?: string;
+  major?: string;
+  graduating_year?: number;
+  photoUrl?: string;
+}
+```
+
+---
+
+## Type Guards and Narrowing Patterns
+
+Since `Event = MemberEvent | AdminEvent` and `NetworkList` accepts `MemberDetail | Sponsor`, the codebase uses `in` narrowing and the `type` discriminant consistently:
+
+```typescript
+// Event narrowing
+if ('event_rsvped' in event) {
+  // event is AdminEvent
+  console.log(event.is_hidden);
+}
+
+// Network entity narrowing
+if (entity.type === 'sponsor') {
+  // entity is Sponsor
+  console.log(entity.tier);
+} else if (entity.type === 'member') {
+  // entity is MemberDetail
+  console.log(entity.rank);
+}
+```
+
+```typescript
+// RoleType narrowing (from authProvider.tsx)
+if (typeof role === 'object' && role !== null && role.type === 'sponsor') {
+  // role is SponsorRole
+  const companyName = role.companyName;
+}
+```

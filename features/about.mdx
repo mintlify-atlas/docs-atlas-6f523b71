@@ -1,0 +1,87 @@
+---
+title: "About Page — Beta Alpha Psi Beta Tau Chapter"
+sidebarTitle: "About"
+description: "The About page documents BAP's history since 1919, Beta Tau Chapter facts, Vision & Mission, a Vimeo embed, the chapter map, and signature events."
+---
+
+The About page (`/about`) gives visitors a comprehensive look at Beta Alpha Psi as a national organization and the Beta Tau Chapter at Arizona State University specifically. It is entirely public — no authentication is required — and follows the same `Navbar` / `Footer` shell used across the platform. On mount, the component dynamically loads the Vimeo player script so the embedded promotional video renders without bundling the SDK at build time. Navigation links adapt to `isAuthenticated` via the shared `getNavLinks()` helper.
+
+## Vimeo Script Injection
+
+The component appends a `<script src="https://player.vimeo.com/api/player.js">` tag to `document.body` inside a `useEffect` with an empty dependency array, ensuring the script loads once. The cleanup function removes the tag on unmount to avoid duplicate script injection on client-side route transitions.
+
+```tsx
+// AboutPage.tsx — Vimeo embed script lifecycle
+useEffect(() => {
+  const script = document.createElement("script");
+  script.src = "https://player.vimeo.com/api/player.js";
+  script.async = true;
+  document.body.appendChild(script);
+
+  return () => {
+    if (document.body.contains(script)) {
+      document.body.removeChild(script);
+    }
+  };
+}, []);
+```
+
+The Vimeo iframe itself (video ID `84151038`) is styled with a 16:9 aspect-ratio trick (`padding-top: 56.25%` on the wrapper, `position: absolute` on the `<iframe>`) and branded with `color=AF272F` in the player URL so the playback controls match the chapter's maroon color scheme.
+
+## Page Structure
+
+The page is divided into three visual rows:
+
+<Steps>
+  <Step title="Introduction paragraph">
+    A short prose paragraph establishes BAP's founding in **1919**, notes **300+ chapters** worldwide with **300,000+ total initiates**, and clarifies that all chapters hold **AACSB and/or EQUIS accreditation**. BAP is explicitly identified as an honors organization, not a fraternity or sorority. Inline links to `aacsb.edu` and `equis.org` open in new tabs.
+  </Step>
+  <Step title="Vision & Mission alongside Vimeo video">
+    A two-column responsive grid (`grid-cols-1 md:grid-cols-2`) places the **Vision** and **Mission** statements in the left column and the **"Why Beta Alpha Psi?"** Vimeo video in the right column. On mobile the video appears first (order-1) and the text second (order-2) to keep the visual hook prominent.
+
+    | Section | Content summary |
+    |---|---|
+    | **Vision** | BAP will shape the financial and business information professions by developing members into ethical, professional, and confident leaders. |
+    | **Mission** | Inspire and support excellence by encouraging study and practice of accountancy, finance, business analytics, and digital technology; providing service, professional development, and interaction; fostering lifelong ethical, social, and public responsibilities. |
+  </Step>
+  <Step title="Chapter map and Beta Tau details">
+    A second two-column grid shows `BAP_Map.png` (a global chapter map with ASU Beta Tau highlighted) on the left, and chapter-specific facts and a signature events list on the right.
+  </Step>
+</Steps>
+
+## Beta Tau Chapter Facts
+
+The Beta Tau Chapter was established in **2005** as the **65th chapter** of Beta Alpha Psi at Arizona State University. It has grown to **900+ alumni** spanning accounting firms, Fortune 500 companies, and small businesses across the US and internationally.
+
+## Signature Events
+
+<CardGroup cols={2}>
+  <Card title="Networking Night Career Fair" icon="handshake">
+    A privately held event giving BAP members direct access to recruiters from several firms — a more personal and targeted experience than campus-wide career fairs open to all ASU students.
+  </Card>
+  <Card title="Firm Presentations" icon="presentation-screen">
+    Weekly professional panels where members learn about firm culture, service offerings, and job or internship opportunities from industry professionals.
+  </Card>
+  <Card title="Jumpstart Service Event" icon="academic-cap">
+    A signature community service event where the Beta Tau Chapter hosts local high school students at ASU to introduce them to career opportunities at Arizona State University.
+  </Card>
+  <Card title="Banquet" icon="star">
+    A biannual formal dinner where members sit alongside industry professionals, watch peers get inducted, and celebrate the semester's milestones.
+  </Card>
+</CardGroup>
+
+## Component Props Reference
+
+| Prop | Value |
+|---|---|
+| Navbar `backgroundColor` | `#FFFFFF` |
+| Navbar `outlineColor` | `#AF272F` |
+| Navbar `title` | `"Beta Alpha Psi \| Beta Tau Chapter"` |
+| Footer `backgroundColor` | `#AF272F` |
+| Vimeo video ID | `84151038` |
+| Vimeo player color param | `AF272F` |
+| Chapter map asset | `BAP_Map.png` |
+
+<Note>
+  The About page does not make any API requests. All content is statically authored inside `AboutPage.tsx`. Only the Vimeo embed and the BAP Map image are loaded from external sources at runtime.
+</Note>

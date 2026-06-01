@@ -1,0 +1,282 @@
+---
+title: "Sponsor Portal: Company Profile and Resource Management"
+sidebarTitle: "Sponsor Portal"
+description: "A complete guide to the sponsor-only portal at /sponsor, covering profile editing, resource uploads, passcode authentication, and the file management workflow."
+---
+
+The Sponsor Portal at `/sponsor` is the private dashboard available exclusively to company sponsors of Beta Alpha Psi Beta Tau Chapter. Once a sponsor authenticates with their unique passcode, they land on `SponsorHome` — a two-column layout where the left column displays and edits the company profile (logo, about text, and links) and the right column manages the resource library that chapter members can browse. All data is fetched from and persisted to the backend using the sponsor's Supabase-issued JWT, which is passed as a `Bearer` token on every request.
+
+## Authentication
+
+Sponsors do **not** use Google OAuth. Instead they authenticate through the `SponsorAuth` component on the `/login` page, which presents a company dropdown populated from `GET /sponsors/names` and a passcode field.
+
+<Steps>
+  <Step title="Select company">
+    The dropdown is populated by `GET ${VITE_BACKEND_URL}/sponsors/names`. Each option contains the sponsor's `company_name`.
+  </Step>
+  <Step title="Enter passcode">
+    The passcode is passed to Supabase as a password. Internally, the company name is slugified (`spaces → -`, lowercased) to form a synthetic email: `company-name@example.com`.
+  </Step>
+  <Step title="Supabase sign-in">
+    `supabase.auth.signInWithPassword({ email, password })` is called. On success, `setSession` and `setRole('sponsor')` are called, and the company name is stored in `localStorage` under the key `sponsorName` for quick retrieval.
+  </Step>
+</Steps>
+
+```typescript
+// SponsorAuth.tsx — core login logic
+const sponsorEmail = companyName.replace(/\s+/g, "-").toLowerCase();
+const { data, error: authError } = await supabase.auth.signInWithPassword({
+  email: `${sponsorEmail}@example.com`,
+  password: passcode,
+});
+if (!authError) {
+  setSession(data.session);
+  setRole("sponsor");
+  localStorage.setItem("sponsorName", companyName);
+}
+```
+
+<Note>
+  The `ProtectedRoute` component verifies that `role` satisfies `role.type === 'sponsor'` before granting access to `/sponsor`. Any visitor without a valid sponsor session is redirected to `/login`.
+</Note>
+
+## Page Structure — `SponsorHome`
+
+`SponsorHome` is the top-level page component. It orchestrates data fetching for both the sponsor profile and the resource list, then delegates rendering to child components.
+
+<CardGroup cols={2}>
+  <Card title="Left Column — Company Profile" icon="building">
+    Renders `SponsorDescription` with the company logo, name, about text, and links. An **Edit Profile** button opens `ProfileEditModal`.
+  </Card>
+  <Card title="Right Column — Resources" icon="folder-open">
+    Stacks `ResourceUploadForm` above `ResourceList`. The form uploads new files; the list shows existing ones with preview and delete actions.
+  </Card>
+</CardGroup>
+
+### Fetching Sponsor Data
+
+On mount, `SponsorHome` resolves the company name from three sources in priority order:
+
+1. `role.companyName` (from `useAuth()` — most reliable)
+2. `localStorage.getItem('sponsorName')`
+3. Fallback: parse the email prefix from `session.user.email`
+
+It then calls `POST /sponsors/get-one-sponsor-info` with `{ sponsor_name }`:
+
+```typescript
+const response = await axios.post(
+  `${import.meta.env.VITE_BACKEND_URL}/sponsors/get-one-sponsor-info`,
+  { sponsor_name: sponsorName },
+  { headers: { Authorization: `Bearer ${token}` } }
+);
+// Response shape: { company_name, about, description, pfp_url, links }
+```
+
+The local state shape is:
+
+```typescript
+interface SponsorData {
+  name: string;
+  description: string;
+  profileUrl: string;
+  links: string[];
+}
+```
+
+### Fetching Resources
+
+After `sponsorData.name` resolves, a second fetch fires:
+
+```typescript
+GET /sponsors/:name/resources
+Authorization: Bearer <token>
+```
+
+The response is an array of `SponsorResource` objects:
+
+```typescript
+interface SponsorResource {
+  id?: number | string;
+  label: string;
+  url: string;
+  uploadDate?: string;
+  mime_type?: string;
+}
+```
+
+## Company Profile — `SponsorDescription`
+
+`SponsorDescription` is a presentational component that renders the sponsor's logo, name, about text, and links list.
+
+```typescript
+interface SponsorDescriptionProps {
+  profileUrl: string;   // Full URL to company logo (Vercel Blob)
+  name: string;         // Company display name
+  description: string;  // About text (max 500 chars)
+  links?: string[];     // Array of https:// URLs
+  onEditClick?: () => void;       // Opens ProfileEditModal
+  isProfileUpdating: boolean;     // Shows spinner overlay on logo
+}
+```
+
+A cache-busting timestamp is appended to the `profileUrl` prop every time the parent updates it:
+
+```typescript
+// SponsorHome.tsx
+<SponsorDescription
+  profileUrl={`${sponsorData.profileUrl}?t=${reloadTimestamp}`}
+  ...
+/>
+```
+
+## Editing the Profile — `ProfileEditModal`
+
+`ProfileEditModal` is a full-featured modal that lets sponsors update three things simultaneously: the company logo, the about text (max 500 characters), and the links list.
+
+```typescript
+interface ProfileEditModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  showDiscardConfirmation: (title: string, message: string, onConfirmDiscard: () => void) => void;
+  sponsorName: string;
+  sponsorDescription: string;
+  onUpdate: (updatedProfile: {
+    description: string;
+    links: string[];
+    newProfilePic: File | null;
+  }) => void;
+  token: string;
+  profileUrl: string;
+  links?: string[];
+}
+```
+
+### Profile Picture Upload
+
+Photo uploads happen immediately when the user selects a file — they do **not** wait for the Save button:
+
+```typescript
+// POST /sponsors/:name/pfp — multipart/form-data
+const formData = new FormData();
+formData.append("file", file);
+const response = await fetch(
+  `${import.meta.env.VITE_BACKEND_URL}/sponsors/${sponsorName}/pfp`,
+  { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData }
+);
+// Response: { photoUrl: string } or { url: string }
+```
+
+To remove a photo, the modal sends `DELETE /sponsors/:name/pfp` and reverts `currentPfpUrl` to `/placeholder-logo.png`.
+
+### Links Management
+
+<Accordion title="Link validation rules">
+  Every URL must pass `new URL(urlString)` with a `http:` or `https:` protocol. Invalid URLs are blocked with an inline error message. When a user clicks **Save** with text still in the input field, a `ConfirmDialog` asks whether to add the pending link or discard it.
+</Accordion>
+
+Links are stored as a `string[]` in React state. Existing links can be edited inline (pencil icon) or removed (× icon, confirmed via `ConfirmDialog`).
+
+### Saving Changes
+
+Clicking **Save Changes** calls `onUpdate` with `{ description, links, newProfilePic }`. The parent `SponsorHome` then calls `POST /sponsors/:name/details`:
+
+```typescript
+// Body:
+{ about: string; links: string[] }
+// Headers:
+{ "Content-Type": "application/json", Authorization: "Bearer <token>" }
+```
+
+<Warning>
+  If the profile picture upload fails mid-flow, the entire update is halted and an alert is shown. The user must re-attempt rather than having partial state committed.
+</Warning>
+
+## Unsaved-Changes Guard
+
+`ProfileEditModal` registers a `beforeunload` listener whenever `hasUnsavedChanges()` returns `true`. Closing the modal while changes are pending triggers a `ConfirmDialog` ("Discard Unsaved Changes?") — the parent `SponsorHome` manages this dialog via the `showDiscardConfirmation` callback prop.
+
+## Resource Management
+
+### Uploading — `ResourceUploadForm`
+
+`ResourceUploadForm` accepts a file, a resource name, and an optional description, then uploads to the backend. Files larger than **4.5 MB** are routed through Vercel Blob's client-side upload path; smaller files use a direct `multipart/form-data` POST.
+
+```typescript
+interface ResourceUploadFormProps {
+  sponsorName: string;
+  token: string;
+  onUploadSuccess: () => void; // Refreshes ResourceList in parent
+}
+```
+
+**Allowed file types:**
+
+| Category | Extensions |
+|---|---|
+| Documents | `.pdf`, `.doc`, `.docx`, `.txt`, `.rtf` |
+| Images | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.svg` |
+| Spreadsheets | `.xls`, `.xlsx`, `.csv` |
+| Presentations | `.ppt`, `.pptx` |
+
+**Maximum file size:** 50 MB
+
+**Large-file path (> 4.5 MB):**
+
+```typescript
+import { upload } from "@vercel/blob/client";
+
+const blob = await upload(file.name, file, {
+  access: "public",
+  handleUploadUrl: `${VITE_BACKEND_URL}/blob-upload/sponsor/${sponsorName}?token=${token}`,
+});
+// Then POST /sponsors/:name/resources with { resourceLabel, description, blobUrl }
+```
+
+**Small-file path (≤ 4.5 MB):**
+
+```typescript
+// POST /sponsors/:name/resources — multipart/form-data
+formData.append("resourceLabel", resourceName);
+formData.append("description", resourceDescription);
+formData.append("file", file);
+```
+
+### Listing Resources — `ResourceList`
+
+```typescript
+interface ResourceListProps {
+  resources: Resource[];
+  isLoading: boolean;
+  onPreview: (resource: Resource) => void;
+  onDeleteConfirm: (resource: Resource) => void;
+  formatDate: (dateString: string | undefined) => string;
+}
+```
+
+Each row shows the resource label, upload date, a **View** button (opens `ResourcePreviewModal`), and a **Delete** button. The Delete button is disabled when `resource.url` is missing.
+
+### Deleting Resources
+
+Clicking Delete triggers a `ConfirmDialog`. On confirmation, the parent `SponsorHome` determines the deletion path:
+
+- **Vercel Blob URL** (`blob.vercel-storage.com` in URL):  
+  `DELETE /blob-upload/sponsor/:name` with body `{ blobUrl }`
+- **Standard resource URL**:  
+  `DELETE /sponsors/:name/resources` with body `{ resourceUrl, resourceId }`
+
+After deletion, `fetchResources()` is called to refresh the list.
+
+## Route & Access Control
+
+```
+/sponsor  →  ProtectedRoute  →  SponsorHome
+```
+
+`ProtectedRoute` checks `role.type === 'sponsor'` (or `role === 'sponsor'` string). Any user with a different role is redirected to `/auth/Home`.
+
+```typescript
+// ProtectedRoute.tsx — sponsor check
+if (path === "/sponsor" && !checkRole("sponsor")) {
+  return false; // → <Navigate to="/auth/Home" />
+}
+```
